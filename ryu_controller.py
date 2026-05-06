@@ -70,13 +70,13 @@ class ClosedLoopController(app_manager.RyuApp):
         self.datapaths[datapath.id] = datapath
         self.logger.info(f"[SWITCH] Connected: dpid={datapath.id}")
         
-        # Add HIGH PRIORITY catch-all rule to send ALL traffic to controller
-        # This ensures we see every packet initially
+        # Add a low-priority catch-all rule so controller still receives
+        # unmatched traffic, but higher-priority RL policies can override it.
         match   = parser.OFPMatch()
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
-        self._add_flow(datapath, 65535, match, actions)  # Highest priority
-        self.logger.info(f"[SWITCH] Installed catch-all rule on dpid={datapath.id} to send all traffic to controller")
+        self._add_flow(datapath, 0, match, actions)  # Low-priority fallback
+        self.logger.info(f"[SWITCH] Installed low-priority catch-all on dpid={datapath.id} to send unmatched traffic to controller")
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):

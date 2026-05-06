@@ -50,6 +50,7 @@ NUM_ACTIONS        = 5          # queue policy choices per switch
 POLL_INTERVAL      = 1.0        # seconds between Ryu stats polls
 OBS_HISTORY        = 3          # how many past intervals to stack in state
 EPISODE_STEPS      = 20         # steps per training episode (~5min real time)
+RL_POLICY_PRIORITY_BASE = 100  # queue rules must outrank the default catch-all
 
 # Queue policy definitions — what each action ID means at the OFP level
 QUEUE_POLICIES = {
@@ -682,16 +683,17 @@ class SDNRoutingEnv(gym.Env):
                       f"policy={policy['name']} action={int(act)}")
 
             # Apply queue assignments for each priority level
-            # by installing/refreshing flow rules per queue
+            # by installing/refreshing match-all queue rules.
             for queue_id, weight in policy['queues'].items():
                 try:
-                    match   = parser.OFPMatch()   # match-all for this switch
+                    match   = parser.OFPMatch()
                     actions = [
                         parser.OFPActionSetQueue(int(queue_id)),
                         parser.OFPActionOutput(ofproto.OFPP_NORMAL)
                     ]
                     inst = [parser.OFPInstructionActions(
                         ofproto.OFPIT_APPLY_ACTIONS, actions)]
+
                     datapath.send_msg(parser.OFPFlowMod(
                         datapath=datapath,
                         cookie=0,
@@ -700,7 +702,7 @@ class SDNRoutingEnv(gym.Env):
                         command=ofproto.OFPFC_ADD,
                         idle_timeout=int(POLL_INTERVAL * 2),
                         hard_timeout=0,
-                        priority=int(queue_id + 1),
+                        priority=RL_POLICY_PRIORITY_BASE + int(queue_id),
                         buffer_id=ofproto.OFP_NO_BUFFER,
                         out_port=ofproto.OFPP_ANY,
                         out_group=ofproto.OFPG_ANY,
@@ -714,7 +716,6 @@ class SDNRoutingEnv(gym.Env):
                     print(traceback.format_exc())
                     print(f"[GYM] Action apply failed dpid={dpid} "
                           f"queue={queue_id}: {e}")
-                    traceback.print_exc()
 
             print(f"[GYM] dist{sw_idx+1} (dpid={dpid}) -> "
                   f"policy='{policy['name']}'")
