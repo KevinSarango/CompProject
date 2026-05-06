@@ -124,17 +124,19 @@ class QTableAgent:
         Map continuous observation vector to a discrete tuple key.
         obs shape: (STATE_DIM,) = (NUM_SWITCHES * FEATURES * HISTORY,)
         We discretize only the most recent interval's features for the key.
+        
+        NOTE: obs is already normalized to [0, 1] by _normalise(), so we bin
+              directly without applying FEATURE_RANGES again.
         """
-        # Take only the last interval's features
+        # Take only the last interval's features (already normalized to [0, 1])
         recent = obs[-NUM_DIST_SWITCHES * FEATURES_PER_SWITCH:]
         bins = []
         for sw in range(NUM_DIST_SWITCHES):
             for feat in range(FEATURES_PER_SWITCH):
                 val   = recent[sw * FEATURES_PER_SWITCH + feat]
-                lo, hi = self.FEATURE_RANGES[feat]
-                # Clamp and bin
-                norm  = np.clip((val - lo) / (hi - lo + 1e-9), 0.0, 1.0)
-                b     = int(norm * (self.NUM_BINS - 1))
+                # val is already in [0, 1], so bin directly
+                # val=0.0 -> bin 0, val=0.5 -> bin 2.5->2, val=1.0 -> bin 4
+                b     = int(np.clip(val, 0.0, 0.9999) * self.NUM_BINS)
                 bins.append(b)
         return tuple(bins)
 
@@ -249,6 +251,13 @@ class SDNRoutingEnv(gym.Env):
         self._sim_mode   = (controller is None)
         self._step_count = 0
         self._episode    = 0
+        self._logged_dpids = False
+
+        print(f"\n[GYM] Initializing SDNRoutingEnv")
+        print(f"[GYM] Mode: {'SIMULATION' if self._sim_mode else 'LIVE (connected to Ryu)'}")
+        print(f"[GYM] Controller: {controller}")
+        print(f"[GYM] State dim: {STATE_DIM}")
+        print(f"[GYM] Num dist switches: {NUM_DIST_SWITCHES}\n")
 
         # Observation: STATE_DIM normalised floats in [0,1]
         self.observation_space = spaces.Box(
@@ -373,6 +382,7 @@ class SDNRoutingEnv(gym.Env):
             db   = ctrl_mod.flow_stats_db
             lock = ctrl_mod.stats_lock
         except ImportError:
+            print("[GYM] WARNING: Could not import ryu_controller, using simulation")
             return self._simulate_stats()
 
         now     = time.time()
@@ -388,8 +398,19 @@ class SDNRoutingEnv(gym.Env):
         with lock:
             snapshot = {d: list(f) for d, f in db.items()}
 
+        # DEBUG: Log what switches we found
+        if not hasattr(self, '_logged_dpids'):
+            print(f"[GYM] Found dpids in controller: {list(snapshot.keys())}")
+            print(f"[GYM] Looking for dpids: {DIST_DPIDS}")
+            self._logged_dpids = True
+
         for sw_idx, dpid in enumerate(DIST_DPIDS):
             flows = snapshot.get(dpid, [])
+            
+            # DEBUG: Log flow counts
+            if self._step_count % 10 == 0:
+                print(f"[GYM] Step {self._step_count}: dpid={dpid} has {len(flows)} flows")
+            
             if not flows:
                 continue
 
@@ -507,40 +528,60 @@ class SDNRoutingEnv(gym.Env):
 
     def _compute_reward(self) -> float:
         """
-        Composite reward derived from raw flow statistics.
-        All terms are normalised so the total sits in roughly [-1, +1].
-
-        Components
-        ----------
-        throughput_score  (+)  Sum of all switch throughputs normalised
-                               by the peak expected (500 Mbps campus-wide).
-                               Encourages the agent to keep traffic flowing.
-
-        fairness_score    (+)  Jain's fairness index over per-switch
-                               throughputs.  Ranges [1/N, 1].
-                               Discourages starving any campus zone.
-
-        congestion_penalty(-) Average coefficient of variation of byte
-                               rates across switches.  High CV => bursty /
-                               congested — agent should flatten it.
-
-        overhead_penalty  (-) Total active flows across all switches
-                               normalised by a ceiling (150 flows).
-                               Excessive flows inflate controller overhead.
+        Composite reward responsive to queue policy changes.
+        
+        OLD approach (unresponsive):
+          - Measured throughput (unaffected by queues)
+          - Measured fairness (already perfect at 0.998)
+        
+        NEW approach (responsive to queue policies):
+          - Flow completion efficiency: Ratio of completed flows to active flows
+          - Duration smoothness: Penalize flows lasting very different times
+          - Rate consistency: Prefer steady throughput over bursty
+          - Overhead: Still penalize too many active flows
+        
+        This rewards queue policies that:
+          1. Prevent packet loss (more flows complete successfully)
+          2. Balance latency (flows finish in similar times)
+          3. Maintain smooth traffic (low variance in throughput)
         """
         raw = self._get_raw_stats()
-
-        bps_per_sw   = raw[:, 0]          # (N,)
-        pps_per_sw   = raw[:, 1]
-        bps_std      = raw[:, 5]
-
-        # --- Throughput score ---
-        total_bps    = float(np.sum(bps_per_sw))
-        PEAK_BPS     = 10e6              # 500 Mbps campus ceiling
-        throughput_score = min(total_bps / PEAK_BPS, 1.0)
-
-        # --- Fairness (Jain's index) ---
+        
+        # Extract features
+        bps_per_sw      = raw[:, 0]      # bytes/sec
+        pps_per_sw      = raw[:, 1]      # packets/sec
+        avg_pkt_size    = raw[:, 2]      # bytes/packet (proxy for flow type)
+        active_flows    = raw[:, 3]      # number of active flows
+        flow_duration   = raw[:, 4]      # mean flow duration (seconds)
+        bps_std         = raw[:, 5]      # variance in throughput
+        pps_std         = raw[:, 6]      # variance in packet rate
+        
+        # ================================================================
+        # Component 1: Flow Duration Efficiency
+        # ================================================================
+        # Good queue policies should complete flows faster
+        # (lower duration = better priority scheduling)
+        # Normalize to [0, 1]: 0 if flows last >60s, 1 if <1s
         eps = 1e-9
+        duration_efficiency = 1.0 - np.clip(float(np.mean(flow_duration)) / 60.0, 0.0, 1.0)
+        
+        # ================================================================
+        # Component 2: Throughput Consistency (lower variance = smoother)
+        # ================================================================
+        # Queue policies stabilize traffic by buffering
+        # Low variance means good queue management
+        total_bps = float(np.sum(bps_per_sw))
+        mean_throughput_std = float(np.mean(bps_std))
+        
+        # Normalize std to [0, 1] for consistency score
+        # High variance (congestion) = penalty
+        consistency_score = np.exp(-mean_throughput_std / max(total_bps, eps))
+        consistency_score = np.clip(consistency_score, 0.0, 1.0)
+        
+        # ================================================================
+        # Component 3: Flow Load Balance (fairness)
+        # ================================================================
+        # Reward equal distribution across switches
         if np.sum(bps_per_sw) > eps:
             n = NUM_DIST_SWITCHES
             s = float(np.sum(bps_per_sw))
@@ -548,28 +589,47 @@ class SDNRoutingEnv(gym.Env):
             fairness_score = (s ** 2) / (n * sq + eps)
         else:
             fairness_score = 0.0
-
-        # --- Congestion penalty ---
-        cv_list = []
-        for i in range(NUM_DIST_SWITCHES):
-            mean_bps = bps_per_sw[i]
-            if mean_bps > eps:
-                cv_list.append(bps_std[i] / mean_bps)
-        congestion_penalty = float(np.mean(cv_list)) if cv_list else 0.0
-        congestion_penalty = min(congestion_penalty, 1.0)
-
-        # --- Overhead penalty ---
-        total_flows    = float(np.sum(raw[:, 3]))
-        FLOW_CEILING   = 150.0
+        
+        # ================================================================
+        # Component 4: Overhead Penalty (too many flows = controller overhead)
+        # ================================================================
+        total_flows = float(np.sum(active_flows))
+        FLOW_CEILING = 150.0
         overhead_penalty = min(total_flows / FLOW_CEILING, 1.0)
-
-        # Weighted sum
+        
+        # ================================================================
+        # Component 5: Activity Penalty (flows should be active, not idle)
+        # ================================================================
+        # If avg packet size is very small OR very large, could indicate
+        # protocol mismatch or stalled flows. Penalize extreme values.
+        mean_pkt_size = float(np.mean(avg_pkt_size))
+        activity_penalty = 0.0
+        if mean_pkt_size < 100:  # Suspiciously small (idle packets?)
+            activity_penalty += 0.1
+        elif mean_pkt_size > 1400:  # Suspiciously large (fragmented?)
+            activity_penalty += 0.05
+        
+        # ================================================================
+        # Composite Reward
+        # ================================================================
         reward = (
-              0.50 * throughput_score
-            + 0.30 * fairness_score
-            - 0.10 * congestion_penalty
-            - 0.10 * overhead_penalty
+            0.35 * duration_efficiency    # Prioritize fast flow completion
+            + 0.25 * consistency_score     # Prioritize smooth throughput
+            + 0.20 * fairness_score        # Maintain fair load distribution
+            - 0.15 * overhead_penalty      # Penalize controller overload
+            - 0.05 * activity_penalty      # Penalize protocol anomalies
         )
+        
+        # DEBUG logging
+        if self._step_count <= 5 or self._step_count % 20 == 0:
+            print(f"[GYM-REWARD] Step {self._step_count}: "
+                  f"duration_eff={duration_efficiency:.3f} "
+                  f"consistency={consistency_score:.3f} "
+                  f"fairness={fairness_score:.3f} "
+                  f"overhead_pen={overhead_penalty:.3f} "
+                  f"activity_pen={activity_penalty:.3f} "
+                  f"→ reward={reward:.4f}")
+        
         return float(np.clip(reward, -1.0, 1.0))
 
     def _apply_action(self, action: np.ndarray):
@@ -589,26 +649,42 @@ class SDNRoutingEnv(gym.Env):
         if self.controller is None:
             return
 
-        # dpids of dist1..dist5 — must match campus_topology.py build()
-        DIST_DPIDS = [9, 10, 11, 12, 13]
+        # dpids of switches — MUST MATCH YOUR TOPOLOGY!
+        # For my_topology.py: s3=3, s4=4
+        # For campus_topology.py: dist1=9, dist2=10, ..., dist5=13
+        DIST_DPIDS = [3, 4]  # BOTTLENECK TOPOLOGY
+        
+        # DEBUG: Show what dpids controller has
+        if self._step_count == 0:
+            available = list(self.controller.datapaths.keys())
+            print(f"\n[GYM ACTION] Available dpids: {available}")
+            print(f"[GYM ACTION] Looking for dpids: {DIST_DPIDS}\n")
 
         for sw_idx, act in enumerate(action):
+            if sw_idx >= len(DIST_DPIDS):
+                break
+            
             dpid   = DIST_DPIDS[sw_idx]
             policy = QUEUE_POLICIES[int(act)]
 
             if dpid not in self.controller.datapaths:
+                if self._step_count % 10 == 0:
+                    print(f"[GYM ACTION] Warning: dpid={dpid} not in controller.datapaths")
                 continue
 
             datapath = self.controller.datapaths[dpid]
             parser   = datapath.ofproto_parser
             ofproto  = datapath.ofproto
 
+            # Log action application
+            if self._step_count <= 5 or self._step_count % 50 == 0:
+                print(f"[GYM ACTION] Step {self._step_count}: dpid={dpid} "
+                      f"policy={policy['name']} action={int(act)}")
+
             # Apply queue assignments for each priority level
             # by installing/refreshing flow rules per queue
             for queue_id, weight in policy['queues'].items():
                 try:
-                    print(f"[GYM DEBUG] dpid={dpid} queue_id={queue_id} "
-              		  f"type={type(queue_id)} value={int(queue_id)}")
                     match   = parser.OFPMatch()   # match-all for this switch
                     actions = [
                         parser.OFPActionSetQueue(int(queue_id)),
@@ -634,6 +710,8 @@ class SDNRoutingEnv(gym.Env):
                     ))
                 except Exception as e:
                     import traceback
+                    print(f"[GYM ACTION] Error applying action: {e}")
+                    print(traceback.format_exc())
                     print(f"[GYM] Action apply failed dpid={dpid} "
                           f"queue={queue_id}: {e}")
                     traceback.print_exc()
@@ -709,6 +787,14 @@ def run_q_learning(controller=None,
             obs             = next_obs
             episode_reward += reward
             episode_actions.append(action.tolist())
+            
+            # DEBUG: Show first episode details
+            if episode == 1 or episode % 25 == 0:
+                raw_stats = env._get_raw_stats()
+                state_key = agent._discretize(obs)
+                if step == 0:
+                    print(f"[EP {episode}] Raw stats: {raw_stats}")
+                    print(f"[EP {episode}] Step {step} action={action} reward={reward:.4f} state_key={state_key[:7]}...")
 
             if terminated or truncated:
                 break
