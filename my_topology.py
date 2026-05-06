@@ -15,23 +15,31 @@ import threading
 
 def gen_iperf_flow(src, dst, port, flow_type, duration=120):
     """Generate iperf flow with traffic-specific parameters."""
+    print(f"\n[IPERF] Starting {flow_type} flow: {src.name} -> {dst.name}:{port}")
+    
     # Start server
-    dst.cmd(f'iperf3 -s -p {port} -D --logfile /tmp/iperf_{dst.name}_{port}.log')
-    time.sleep(0.2)
+    srv_cmd = f'iperf3 -s -p {port} -D --logfile /tmp/iperf_{dst.name}_{port}.log'
+    print(f"[IPERF] {dst.name}: {srv_cmd}")
+    dst.cmd(srv_cmd)
+    time.sleep(0.5)
     
     # Start client with traffic-specific settings
     if flow_type == 'bulk':
-        src.cmd(f'iperf3 -c {dst.IP()} -p {port} -t {duration} -b 50M '
-                f'--logfile /tmp/bulk_{src.name}.log &')
+        cmd = (f'iperf3 -c {dst.IP()} -p {port} -t {duration} -b 50M '
+               f'--logfile /tmp/bulk_{src.name}.log')
     elif flow_type == 'video':
-        src.cmd(f'iperf3 -c {dst.IP()} -p {port} -u -b 5M -l 1000 -t {duration} '
-                f'--logfile /tmp/video_{src.name}.log &')
+        cmd = (f'iperf3 -c {dst.IP()} -p {port} -u -b 5M -l 1000 -t {duration} '
+               f'--logfile /tmp/video_{src.name}.log')
     elif flow_type == 'voip':
-        src.cmd(f'iperf3 -c {dst.IP()} -p {port} -u -b 64k -l 200 -t {duration} '
-                f'--logfile /tmp/voip_{src.name}.log &')
+        cmd = (f'iperf3 -c {dst.IP()} -p {port} -u -b 64k -l 200 -t {duration} '
+               f'--logfile /tmp/voip_{src.name}.log')
     elif flow_type == 'interactive':
-        src.cmd(f'iperf3 -c {dst.IP()} -p {port} -b 1M -t {duration} '
-                f'--logfile /tmp/interactive_{src.name}.log &')
+        cmd = (f'iperf3 -c {dst.IP()} -p {port} -b 1M -t {duration} '
+               f'--logfile /tmp/interactive_{src.name}.log')
+    
+    print(f"[IPERF] {src.name}: {cmd} &")
+    src.cmd(f'{cmd} &')
+    print(f"[IPERF] {flow_type} flow started: {src.name} -> {dst.name}:{port}")
 
 def launch_bottleneck_traffic(net, num_flows=4, duration=120):
     """
@@ -41,8 +49,11 @@ def launch_bottleneck_traffic(net, num_flows=4, duration=120):
     """
     hosts = {h.name: h for h in net.hosts}
     
-    print(f"\n[TRAFFIC] Launching {num_flows} competing flows on bottleneck...")
-    print(f"[TRAFFIC] Duration: {duration}s\n")
+    print(f"\n{'='*60}")
+    print(f"[TRAFFIC] Launching {num_flows} competing flows on bottleneck...")
+    print(f"[TRAFFIC] Duration: {duration}s")
+    print(f"[TRAFFIC] Available hosts: {list(hosts.keys())}")
+    print(f"{'='*60}\n")
     
     flow_types = ['bulk', 'video', 'voip', 'interactive']
     port = 5200
@@ -77,10 +88,18 @@ def launch_bottleneck_traffic(net, num_flows=4, duration=120):
                 print(f"  [{flow_type.upper():12s}] {src_name} -> {dst_name}")
                 gen_iperf_flow(src, dst, port, flow_type, duration)
                 port += 1
-                time.sleep(0.2)
+                time.sleep(0.5)   # increased stagger for better startup
+            else:
+                print(f"[TRAFFIC] WARNING: Could not find hosts {src_name} and/or {dst_name}")
     
     print(f"\n[TRAFFIC] {num_flows} flows started. Competing at bottleneck link.")
     print(f"[TRAFFIC] Scenario logged to traffic_scenario.log\n")
+    time.sleep(2)
+    
+    # Verify traffic is running
+    print("[TRAFFIC] Verifying traffic is running...")
+    time.sleep(5)
+    print("[TRAFFIC] Traffic generation complete.")
 
 # ------------------ Bottleneck Topology ------------------
 
@@ -130,16 +149,26 @@ def run(num_flows=4):
 
     try:
         net.start()
+        print("\n" + "="*60)
         print("*** Bottleneck Network Started ***")
         print(f"*** Switches : 2 core switches with 10 Mbps bottleneck link")
         print(f"*** Hosts    : {num_flows*2} ({num_flows} sources + {num_flows} destinations)")
         print(f"*** Flows    : {num_flows} competing flows")
-        print("*** Launching traffic in 3s...")
+        print(f"*** Controller: 127.0.0.1:6653")
+        print("="*60 + "\n")
+        
+        print("[SETUP] Waiting for all switches to connect to controller...")
         time.sleep(3)
 
+        print("[SETUP] Testing connectivity with ping...")
         net.pingAll()
         time.sleep(2)
+        
+        print("[SETUP] Second ping test...")
         net.pingAll()
+        
+        print("[SETUP] Connectivity verified!")
+        print("[SETUP] Starting traffic generation in background thread...\n")
         
         # Launch competing traffic in a thread
         t = threading.Thread(
@@ -150,10 +179,11 @@ def run(num_flows=4):
         )
         t.start()
 
+        print("[SETUP] Entering CLI - type 'exit' to stop\n")
         CLI(net)
     finally:
         net.stop()
-        print("*** Network stopped and cleaned up ***")
+        print("\n*** Network stopped and cleaned up ***")
 
 # ------------------ Main ------------------
 

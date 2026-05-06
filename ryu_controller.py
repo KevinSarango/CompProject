@@ -69,10 +69,14 @@ class ClosedLoopController(app_manager.RyuApp):
         parser   = datapath.ofproto_parser
         self.datapaths[datapath.id] = datapath
         self.logger.info(f"[SWITCH] Connected: dpid={datapath.id}")
+        
+        # Add HIGH PRIORITY catch-all rule to send ALL traffic to controller
+        # This ensures we see every packet initially
         match   = parser.OFPMatch()
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
-        self._add_flow(datapath, 0, match, actions)
+        self._add_flow(datapath, 65535, match, actions)  # Highest priority
+        self.logger.info(f"[SWITCH] Installed catch-all rule on dpid={datapath.id} to send all traffic to controller")
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
@@ -81,13 +85,20 @@ class ClosedLoopController(app_manager.RyuApp):
         ofproto  = datapath.ofproto
         parser   = datapath.ofproto_parser
         in_port  = msg.match['in_port']
+        
+        self.logger.info(f"[PACKET_IN] dpid={datapath.id} in_port={in_port} buffer_id={msg.buffer_id}")
+        
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
         if eth is None:
+            self.logger.debug("[PACKET_IN] No Ethernet protocol found")
             return
         dst  = eth.dst
         src  = eth.src
         dpid = datapath.id
+        
+        self.logger.info(f"[PACKET_IN] src={src} dst={dst}")
+        
         self.mac_to_port.setdefault(dpid, {})
         self.mac_to_port[dpid][src] = in_port
         out_port = (self.mac_to_port[dpid][dst]
@@ -96,12 +107,14 @@ class ClosedLoopController(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(out_port)]
         if out_port != ofproto.OFPP_FLOOD:
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
-            self._add_flow(datapath, 1, match, actions)
+            self._add_flow(datapath, 10, match, actions)
+            self.logger.info(f"[PACKET_IN] Installed flow for {dst} out on port {out_port}")
         data = msg.data if msg.buffer_id == ofproto.OFP_NO_BUFFER else None
         out  = parser.OFPPacketOut(
             datapath=datapath, buffer_id=msg.buffer_id,
             in_port=in_port, actions=actions, data=data)
         datapath.send_msg(out)
+        self.logger.info(f"[PACKET_IN] Sent PacketOut to port {out_port}")
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
     def flow_stats_reply_handler(self, ev):
@@ -129,10 +142,17 @@ class ClosedLoopController(app_manager.RyuApp):
 
     def _monitor_loop(self):
         """Collect flow statistics and make available to RL agent."""
+        first_stats = True
         while True:
             t0 = time.time()
             with stats_lock:
                 datapaths = list(self.datapaths.values())
+            
+            if not datapaths:
+                self.logger.debug("[MONITOR] Waiting for switches to connect...")
+                hub.sleep(1)
+                continue
+                
             for dp in datapaths:
                 self._request_flow_stats(dp)
             hub.sleep(0.1)
@@ -143,10 +163,14 @@ class ClosedLoopController(app_manager.RyuApp):
             stats_ms = (t2 - t1) * 1000
 
             self._log_metrics(len(datapaths), len(features_list), stats_ms)
-            self.logger.info(
-                f"[LOOP] flows={len(features_list)} | "
-                f"stats_update={stats_ms:.1f}ms"
-            )
+            
+            if first_stats or len(features_list) > 0:
+                self.logger.info(
+                    f"[MONITOR] switches={len(datapaths)} | flows={len(features_list)} | "
+                    f"stats_update={stats_ms:.1f}ms"
+                )
+                first_stats = False
+            
             hub.sleep(max(0, POLL_INTERVAL - (time.time() - t0)))
 
     def _extract_features(self):
@@ -234,6 +258,7 @@ class ClosedLoopController(app_manager.RyuApp):
             self.logger.warning(f"[RL] apply_rl_action failed: {e}")
 
     def _request_flow_stats(self, datapath):
+        self.logger.debug(f"[STATS_REQUEST] Requesting stats from dpid={datapath.id}")
         datapath.send_msg(
             datapath.ofproto_parser.OFPFlowStatsRequest(datapath))
 
