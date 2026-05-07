@@ -1,5 +1,5 @@
 timestamp,src,dst,flow_type,bitrate_mbps,protocol,packet_size
-1778035171.7975726,src1,dst1,bulk,50,TCP,MTU
-1778035172.905468,src2,dst2,video,5,UDP,1000B
-1778035174.4123018,src3,dst3,voip,0.064,UDP,200B
-1778035175.4198449,src4,dst4,interactive,1,TCP,mixed
+1778116463.3054242,src1,dst1,bulk,50,TCP,MTU
+1778116464.3114552,src2,dst2,video,5,UDP,1000B
+1778116465.3169312,src3,dst3,voip,0.064,UDP,200B
+1778116466.3231328,src4,dst4,interactive,1,TCP,mixed

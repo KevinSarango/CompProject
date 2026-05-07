@@ -15,11 +15,11 @@ import threading
 
 def gen_iperf_flow(src, dst, port, flow_type, duration=120):
     """Generate iperf flow with traffic-specific parameters."""
-    print(f"\n[IPERF] Starting {flow_type} flow: {src.name} -> {dst.name}:{port}")
+    # print(f"\n[IPERF] Starting {flow_type} flow: {src.name} -> {dst.name}:{port}")
     
     # Start server
     srv_cmd = f'iperf3 -s -p {port} -D --logfile /tmp/iperf_{dst.name}_{port}.log'
-    print(f"[IPERF] {dst.name}: {srv_cmd}")
+    # print(f"[IPERF] {dst.name}: {srv_cmd}")
     dst.cmd(srv_cmd)
     time.sleep(0.5)
     
@@ -37,9 +37,9 @@ def gen_iperf_flow(src, dst, port, flow_type, duration=120):
         cmd = (f'iperf3 -c {dst.IP()} -p {port} -b 1M -t {duration} '
                f'--logfile /tmp/interactive_{src.name}.log')
     
-    print(f"[IPERF] {src.name}: {cmd} &")
+    # print(f"[IPERF] {src.name}: {cmd} &")
     src.cmd(f'{cmd} &')
-    print(f"[IPERF] {flow_type} flow started: {src.name} -> {dst.name}:{port}")
+    # print(f"[IPERF] {flow_type} flow started: {src.name} -> {dst.name}:{port}")
 
 def launch_bottleneck_traffic(net, num_flows=4, duration=120):
     """
@@ -49,11 +49,11 @@ def launch_bottleneck_traffic(net, num_flows=4, duration=120):
     """
     hosts = {h.name: h for h in net.hosts}
     
-    print(f"\n{'='*60}")
-    print(f"[TRAFFIC] Launching {num_flows} competing flows on bottleneck...")
-    print(f"[TRAFFIC] Duration: {duration}s")
-    print(f"[TRAFFIC] Available hosts: {list(hosts.keys())}")
-    print(f"{'='*60}\n")
+    # print(f"\n{'='*60}")
+    # print(f"[TRAFFIC] Launching {num_flows} competing flows on bottleneck...")
+    # print(f"[TRAFFIC] Duration: {duration}s")
+    # print(f"[TRAFFIC] Available hosts: {list(hosts.keys())}")
+    # print(f"{'='*60}\n")
     
     flow_types = ['bulk', 'video', 'voip', 'interactive']
     port = 5200
