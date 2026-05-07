@@ -64,12 +64,12 @@ NUM_DIST_SWITCHES = 2
 NUM_ACTIONS = 5
 
 POLL_INTERVAL = 1.0
-OBS_HISTORY = 3
+OBS_HISTORY = 1  # Reduced from 3 to 1 to shrink state space
 EPISODE_STEPS = 20
 
 RL_POLICY_PRIORITY_BASE = 100
 
-FEATURES_PER_SWITCH = 7
+FEATURES_PER_SWITCH = 4  # Reduced from 7 to 4: throughput, fairness proxy, active flows, duration
 STATE_DIM = NUM_DIST_SWITCHES * FEATURES_PER_SWITCH * OBS_HISTORY
 
 EPS = 1e-9
@@ -92,7 +92,7 @@ QUEUE_POLICIES = {
 
 class QTableAgent:
 
-    NUM_BINS = 5
+    NUM_BINS = 3  # Reduced from 5 to 3 for smaller state space
 
     def __init__(self,
                  alpha=0.1,
@@ -446,12 +446,6 @@ class SDNRoutingEnv(gym.Env):
                 # throughput
                 float(np.sum(bytes_rates)),
 
-                # packet rate
-                float(np.sum(pkt_rates)),
-
-                # avg pkt size
-                float(np.mean(pkt_sizes)),
-
                 # active flows
                 float(len(bytes_rates)),
 
@@ -459,10 +453,7 @@ class SDNRoutingEnv(gym.Env):
                 float(np.mean(durations)),
 
                 # throughput std
-                float(np.std(bytes_rates)),
-
-                # packet std
-                float(np.std(pkt_rates))
+                float(np.std(bytes_rates))
             ]
 
         # DEBUG: Summary of what was extracted
@@ -517,25 +508,19 @@ class SDNRoutingEnv(gym.Env):
         raw = self._get_raw_stats()
 
         bps = raw[:, 0]
-        pps = raw[:, 1]
 
-        avg_pkt = raw[:, 2]
+        active_flows = raw[:, 1]
 
-        active_flows = raw[:, 3]
+        duration = raw[:, 2]
 
-        duration = raw[:, 4]
-
-        bps_std = raw[:, 5]
-
-        pps_std = raw[:, 6]
+        bps_std = raw[:, 3]
 
         # DEBUG: Show raw stats before reward calculation
         if self._step_count % 10 == 0:
             print(f"[RAW-STATS] Step {self._step_count}:")
             for i, row in enumerate(raw):
-                print(f"  switch {i}: bps={row[0]:.0f} pps={row[1]:.0f} "
-                      f"pkt_size={row[2]:.0f} flows={int(row[3])} "
-                      f"dur={row[4]:.1f}s")
+                print(f"  switch {i}: bps={row[0]:.0f} flows={int(row[1])} "
+                      f"dur={row[2]:.1f}s std={row[3]:.0f}")
 
         # ==========================================================
         # 1. Throughput reward
@@ -585,19 +570,7 @@ class SDNRoutingEnv(gym.Env):
         )
 
         # ==========================================================
-        # 5. Packet-loss proxy
-        # ==========================================================
-
-        expected_bytes = np.sum(pps * avg_pkt)
-
-        loss_ratio = abs(
-            total_bps - expected_bytes
-        ) / (expected_bytes + EPS)
-
-        loss_penalty = np.clip(loss_ratio, 0.0, 1.0)
-
-        # ==========================================================
-        # 6. Overhead
+        # 5. Overhead
         # ==========================================================
 
         flow_penalty = np.tanh(
@@ -610,17 +583,15 @@ class SDNRoutingEnv(gym.Env):
 
         reward = (
 
-            + 0.35 * throughput_reward
+            + 0.40 * throughput_reward
 
-            + 0.25 * fairness
+            + 0.30 * fairness
 
             + 0.20 * queue_efficiency
 
             - 0.10 * congestion_penalty
 
-            - 0.05 * flow_penalty
-
-            - 0.05 * loss_penalty
+            - 0.10 * flow_penalty
         )
 
         reward = float(np.clip(reward, -1.0, 1.0))
@@ -634,7 +605,6 @@ class SDNRoutingEnv(gym.Env):
             f"queue={queue_efficiency:.3f} "
             f"cong={congestion_penalty:.3f} "
             f"flow_pen={flow_penalty:.3f} "
-            f"loss={loss_penalty:.3f} "
             f"-> reward={reward:.4f}"
         )
 
@@ -743,32 +713,21 @@ class SDNRoutingEnv(gym.Env):
 
             throughput = rng.normal(5e8, 1e8)
 
-            pkt_rate = rng.normal(3e5, 5e4)
-
-            pkt_size = rng.normal(1200, 100)
-
             flows = rng.integers(2, 8)
 
             duration = rng.normal(20, 5)
 
             bps_std = rng.normal(1e8, 2e7)
 
-            pps_std = rng.normal(5e4, 1e4)
-
             result[i] = [
 
                 max(throughput, 0),
-                max(pkt_rate, 0),
-
-                max(pkt_size, 64),
 
                 max(flows, 1),
 
                 max(duration, 1),
 
-                max(bps_std, 0),
-
-                max(pps_std, 0)
+                max(bps_std, 0)
             ]
 
         return result
