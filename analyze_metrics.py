@@ -88,7 +88,7 @@ def gen_background(src, dst, count=30, interval=0.5):
 
 
 # -------------------------------------------------------------------
-# Role-based traffic scenario
+# Role-based campus traffic mix
 # Maps each building/zone to realistic application mix
 # -------------------------------------------------------------------
 

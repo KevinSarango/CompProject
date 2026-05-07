@@ -10,6 +10,7 @@ from mininet.net import Mininet
 from mininet.node import RemoteController
 from mininet.cli import CLI
 from mininet.link import TCLink
+from mininet.topo import Topo
 import time
 import threading
 
@@ -45,86 +46,41 @@ def launch_bottleneck_traffic(net, num_flows=4, duration=120):
     """
     Launch competing flows across the bottleneck.
     num_flows: how many concurrent flows (default 4)
-    Logs traffic scenario to traffic_scenario.log for RL correlation analysis.
     """
     hosts = {h.name: h for h in net.hosts}
-    
-    # print(f"\n{'='*60}")
-    # print(f"[TRAFFIC] Launching {num_flows} competing flows on bottleneck...")
-    # print(f"[TRAFFIC] Duration: {duration}s")
-    # print(f"[TRAFFIC] Available hosts: {list(hosts.keys())}")
-    # print(f"{'='*60}\n")
     
     flow_types = ['bulk', 'video', 'voip', 'interactive']
     port = 5200
     
-    # Log traffic scenario for correlation analysis
-    with open('traffic_scenario.log', 'w') as f:
-        f.write('timestamp,src,dst,flow_type,bitrate_mbps,protocol,packet_size\n')
+    for i in range(num_flows):
+        src_name = f'src{i+1}'
+        dst_name = f'dst{i+1}'
+        flow_type = flow_types[i % len(flow_types)]
         
-        for i in range(num_flows):
-            src_name = f'src{i+1}'
-            dst_name = f'dst{i+1}'
-            flow_type = flow_types[i % len(flow_types)]
-            
-            src = hosts.get(src_name)
-            dst = hosts.get(dst_name)
-            
-            if src and dst:
-                # Define traffic characteristics
-                if flow_type == 'bulk':
-                    bitrate, protocol, pkt_size = 50, 'TCP', 'MTU'
-                elif flow_type == 'video':
-                    bitrate, protocol, pkt_size = 5, 'UDP', '1000B'
-                elif flow_type == 'voip':
-                    bitrate, protocol, pkt_size = 0.064, 'UDP', '200B'
-                elif flow_type == 'interactive':
-                    bitrate, protocol, pkt_size = 1, 'TCP', 'mixed'
-                
-                # Log this traffic flow
-                f.write(f'{time.time()},{src_name},{dst_name},{flow_type},'
-                        f'{bitrate},{protocol},{pkt_size}\n')
-                
-                print(f"  [{flow_type.upper():12s}] {src_name} -> {dst_name}")
-                gen_iperf_flow(src, dst, port, flow_type, duration)
-                port += 1
-                time.sleep(0.5)   # increased stagger for better startup
-            else:
-                print(f"[TRAFFIC] WARNING: Could not find hosts {src_name} and/or {dst_name}")
+        src = hosts.get(src_name)
+        dst = hosts.get(dst_name)
+        
+        if src and dst:
+            print(f"  [{flow_type.upper():12s}] {src_name} -> {dst_name}")
+            gen_iperf_flow(src, dst, port, flow_type, duration)
+            port += 1
+            time.sleep(0.5)   # increased stagger for better startup
+        else:
+            print(f"[TRAFFIC] WARNING: Could not find hosts {src_name} and/or {dst_name}")
     
     print(f"\n[TRAFFIC] {num_flows} flows started. Competing at bottleneck link.")
-    print(f"[TRAFFIC] Scenario logged to traffic_scenario.log\n")
     time.sleep(2)
-    
-    # Verify traffic is running
-    print("[TRAFFIC] Verifying traffic is running...")
-    time.sleep(5)
-    print("[TRAFFIC] Traffic generation complete.")
 
-# ------------------ Bottleneck Topology ------------------
-
-from mininet.topo import Topo
 
 class BottleneckTopo(Topo):
-    """
-    Simple bottleneck topology:
-    - N source hosts
-    - N destination hosts
-    - All traffic forced through core switch (s3) → core switch (s4)
-    - Congested link: s3-s4 bottleneck
-    """
+    """Simple bottleneck topology for RL QoS training."""
     def __init__(self, num_flows=4, **opts):
         super().__init__(**opts)
-
-        # Store number of flows
-        self.num_flows = num_flows
-
-        # Core switches (bottleneck)
         s3 = self.addSwitch('s3', dpid='0000000000000003')
         s4 = self.addSwitch('s4', dpid='0000000000000004')
 
         # Bottleneck link
-        self.addLink(s3, s4, bw=10)  # 10 Mbps bottleneck
+        self.addLink(s3, s4, bw=10)
 
         # Source hosts connect to s3
         for i in range(1, num_flows + 1):
