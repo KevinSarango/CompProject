@@ -111,13 +111,13 @@ def analyze_rl_learning(rewards_df):
         print(f"    → ✗✗ STRONG DECAY - CHECK TRAFFIC CONDITIONS")
     
     if 'decay' in rewards_df.columns:
-        decay_episodes = rewards_df[rewards_df['decay'] < -0.1]
-        if len(decay_episodes) > 0:
-            episodes = decay_episodes['episode'].tolist()[:10] if 'episode' in decay_episodes.columns else []
-            print(f"\n  Learning decay detected in {len(decay_episodes)} episodes:")
+        improving_episodes = rewards_df[rewards_df['decay'] > 0.1]
+        if len(improving_episodes) > 0:
+            episodes = improving_episodes['episode'].tolist()[:10] if 'episode' in improving_episodes.columns else []
+            print(f"\n  Learning improvement detected in {len(improving_episodes)} episodes:")
             print(f"    Episodes: {episodes}")
     else:
-        print("\n  No decay column present in RL rewards log; skipping decay analysis.")
+        print("\n  No decay column present in RL rewards log; skipping improvement analysis.")
 
 def analyze_controller_metrics(metrics_df):
     """Analyze controller-side flow dynamics."""
@@ -283,11 +283,11 @@ def main():
             # Plot 2: Decay detection
             ax = axes[0, 1]
             if 'decay' in rewards_df.columns:
-                ax.plot(rewards_df['episode'], rewards_df['decay'], 'g-', label='Learning decay')
-                ax.axhline(y=-0.1, color='r', linestyle='--', label='Decay threshold')
+                ax.plot(rewards_df['episode'], rewards_df['decay'], 'g-', label='Learning improvement')
+                ax.axhline(y=0.1, color='r', linestyle='--', label='Improvement threshold')
             ax.set_xlabel('Episode')
-            ax.set_ylabel('Decay (avg10 - avg20)')
-            ax.set_title('Learning Stability')
+            ax.set_ylabel('Improvement (avg20 - avg10)')
+            ax.set_title('Learning Progress')
             ax.legend()
             ax.grid()
             

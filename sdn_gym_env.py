@@ -48,6 +48,8 @@ except ImportError:
 
 import numpy as np
 import threading
+import pandas as pd
+import os
 import time
 import random
 import os
@@ -529,7 +531,7 @@ class SDNRoutingEnv(gym.Env):
         total_bps = np.sum(bps)
 
         throughput_reward = np.tanh(
-            total_bps / 5e8
+            total_bps / 1e6  # Scaled for 10Mbps network (1.25e6 bps max)
         )
 
         # ==========================================================
@@ -539,7 +541,7 @@ class SDNRoutingEnv(gym.Env):
         mean_std = np.mean(bps_std)
 
         congestion_penalty = np.tanh(
-            mean_std / (total_bps + EPS)
+            mean_std / 5e5  # Scaled for expected std in 10Mbps network
         )
 
         # ==========================================================
@@ -583,15 +585,15 @@ class SDNRoutingEnv(gym.Env):
 
         reward = (
 
-            + 0.40 * throughput_reward
+            + 0.50 * throughput_reward
 
-            + 0.30 * fairness
+            + 0.20 * fairness
 
             + 0.20 * queue_efficiency
 
-            - 0.10 * congestion_penalty
+            - 0.05 * congestion_penalty
 
-            - 0.10 * flow_penalty
+            - 0.05 * flow_penalty
         )
 
         reward = float(np.clip(reward, -1.0, 1.0))
@@ -784,6 +786,9 @@ def run_q_learning(controller=None,
     print(f"  Mode           : {'LIVE (Ryu)' if controller else 'SIMULATION'}")
     print("=" * 70 + "\n")
 
+    # Track training metrics
+    training_log = []
+    
     for episode in range(1, total_episodes + 1):
         obs, _ = env.reset()
         episode_reward = 0.0
@@ -806,21 +811,41 @@ def run_q_learning(controller=None,
 
         agent.episode_rewards.append(episode_reward)
 
+        # Compute averages
+        recent_10 = agent.episode_rewards[-min(10, len(agent.episode_rewards)):]
+        recent_20 = agent.episode_rewards[-min(20, len(agent.episode_rewards)):]
+        avg_10 = np.mean(recent_10) if recent_10 else 0.0
+        avg_20 = np.mean(recent_20) if recent_20 else 0.0
+        decay = avg_20 - avg_10  # Positive when improving
+
+        # Log episode data
+        training_log.append({
+            'episode': episode,
+            'reward': episode_reward,
+            'avg_10': avg_10,
+            'avg_20': avg_20,
+            'decay': decay,
+            'num_states': len(agent.q_table),
+            'epsilon': agent.epsilon
+        })
+
         # Periodic save and logging
         if episode % save_every == 0 or episode == total_episodes:
             agent.save(q_table_path)
 
-            # Compute running average
-            recent_rewards = agent.episode_rewards[-min(10, len(agent.episode_rewards)):]
-            avg_reward = np.mean(recent_rewards) if recent_rewards else 0.0
-
             print(
                 f"[Q-LEARNING] Episode {episode:3d}/{total_episodes} | "
                 f"reward={episode_reward:7.4f} | "
-                f"avg_10={avg_reward:7.4f} | "
+                f"avg_10={avg_10:7.4f} | "
                 f"epsilon={agent.epsilon:.4f} | "
                 f"q_states={len(agent.q_table):5d}"
             )
+
+    # Save training log
+    log_df = pd.DataFrame(training_log)
+    log_path = os.path.join(DATA_DIR, 'rl_episode_rewards.log')
+    log_df.to_csv(log_path, index=False)
+    print(f"[Q-LEARNING] Training log saved to {log_path}")
 
     env.close()
     print("\n[Q-LEARNING] Training complete.\n")

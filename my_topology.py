@@ -42,7 +42,35 @@ def gen_iperf_flow(src, dst, port, flow_type, duration=120):
     src.cmd(f'{cmd} &')
     # print(f"[IPERF] {flow_type} flow started: {src.name} -> {dst.name}:{port}")
 
-def launch_bottleneck_traffic(net, num_flows=4, duration=120):
+def configure_queues(net):
+    """Configure QoS queues on bottleneck switches."""
+    print("[SETUP] Configuring QoS queues on switches...")
+    
+    # Get switches
+    s3 = net.get('s3')
+    s4 = net.get('s4')
+    
+    if s3 and s4:
+        # Configure queues on s3-eth1 (port to bottleneck)
+        s3.cmd('ovs-vsctl -- set Port s3-eth1 qos=@newqos -- '
+               '--id=@newqos create QoS type=linux-htb other-config:max-rate=10000000 '
+               'queues=0=@q0,1=@q1,2=@q2 -- '
+               '--id=@q0 create Queue other-config:min-rate=10000000 other-config:max-rate=10000000 -- '
+               '--id=@q1 create Queue other-config:min-rate=5000000 other-config:max-rate=10000000 -- '
+               '--id=@q2 create Queue other-config:min-rate=1000000 other-config:max-rate=10000000')
+        
+        # Configure queues on s4-eth1 (port to bottleneck)
+        s4.cmd('ovs-vsctl -- set Port s4-eth1 qos=@newqos -- '
+               '--id=@newqos create QoS type=linux-htb other-config:max-rate=10000000 '
+               'queues=0=@q0,1=@q1,2=@q2 -- '
+               '--id=@q0 create Queue other-config:min-rate=10000000 other-config:max-rate=10000000 -- '
+               '--id=@q1 create Queue other-config:min-rate=5000000 other-config:max-rate=10000000 -- '
+               '--id=@q2 create Queue other-config:min-rate=1000000 other-config:max-rate=10000000')
+        
+        print("[SETUP] QoS queues configured: queue 0=10Mbps, 1=5Mbps, 2=1Mbps")
+    else:
+        print("[SETUP] WARNING: Could not find switches s3/s4 for queue config")
+
     """
     Launch competing flows across the bottleneck.
     num_flows: how many concurrent flows (default 4)
@@ -124,6 +152,7 @@ def run(num_flows=4):
         net.pingAll()
         
         print("[SETUP] Connectivity verified!")
+        configure_queues(net)
         print("[SETUP] Starting traffic generation in background thread...\n")
         
         # Launch competing traffic in a thread
