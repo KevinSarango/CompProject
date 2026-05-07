@@ -107,7 +107,7 @@ class ClosedLoopController(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(out_port)]
         if out_port != ofproto.OFPP_FLOOD:
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
-            self._add_flow(datapath, 10, match, actions)
+            self._add_flow(datapath, 10, match, actions, idle_timeout=300)
             self.logger.info(f"[PACKET_IN] Installed flow for {dst} out on port {out_port}")
         data = msg.data if msg.buffer_id == ofproto.OFP_NO_BUFFER else None
         out  = parser.OFPPacketOut(
@@ -122,6 +122,13 @@ class ClosedLoopController(app_manager.RyuApp):
         flows = []
 
         self.logger.info(f"[STATS] dpid={dpid} total_entries={len(ev.msg.body)}")
+        
+        # DEBUG: Log first 5 entries before filtering
+        for i, stat in enumerate(ev.msg.body[:5]):
+            self.logger.info(
+                f"  Entry {i}: priority={stat.priority} bytes={stat.byte_count} "
+                f"packets={stat.packet_count} duration={stat.duration_sec}s"
+            )
         
         for stat in ev.msg.body:
             if stat.priority == 0:

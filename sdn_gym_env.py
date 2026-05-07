@@ -174,6 +174,41 @@ class QTableAgent:
 
         self.total_steps += 1
 
+    # ------------------------------------------------------------------
+
+    def save(self, path=None):
+        """Persist Q-table to disk."""
+        if path is None:
+            path = f'{DATA_DIR}/q_table.npy'
+        os.makedirs(DATA_DIR, exist_ok=True)
+        data = {
+            'q_table': dict(self.q_table),
+            'epsilon': self.epsilon,
+            'steps': self.total_steps,
+            'rewards': self.episode_rewards,
+        }
+        np.save(path, data, allow_pickle=True)
+        print(f"[Q-AGENT] Saved Q-table → {path} "
+              f"({len(self.q_table)} unique states)")
+
+    # ------------------------------------------------------------------
+
+    def load(self, path=None):
+        """Restore Q-table from disk."""
+        if path is None:
+            path = f'{DATA_DIR}/q_table.npy'
+        if not os.path.exists(path):
+            print(f"[Q-AGENT] No saved Q-table found at {path}")
+            return
+        data = np.load(path, allow_pickle=True).item()
+        for k, v in data['q_table'].items():
+            self.q_table[k] = v
+        self.epsilon = data.get('epsilon', self.epsilon_min)
+        self.total_steps = data.get('steps', 0)
+        self.episode_rewards = data.get('rewards', [])
+        print(f"[Q-AGENT] Loaded Q-table from {path} "
+              f"({len(self.q_table)} states, epsilon={self.epsilon:.3f})")
+
 # ---------------------------------------------------------------------------
 # Gym Environment
 # ---------------------------------------------------------------------------
@@ -194,6 +229,9 @@ class SDNRoutingEnv(gym.Env):
         self._step_count = 0
         self._episode = 0
 
+        # Track last applied action per switch to avoid reinstalling rules
+        self._last_action = {}
+
         self.observation_space = spaces.Box(
             low=0.0,
             high=1.0,
@@ -212,17 +250,11 @@ class SDNRoutingEnv(gym.Env):
         self._prev_bytes = {}
         self._prev_packets = {}
 
-        self._dynamic_max = np.ones(FEATURES_PER_SWITCH) * 1e-6
+        # Track cumulative bytes/packets across rule reinstalls
+        self._cumulative_bytes = {}
+        self._cumulative_packets = {}
 
-        print("\n" + "=" * 60)
-        print("  SDN Q-Learning Training")
-        print(f"  Episodes       : {total_episodes}")
-        print(f"  Steps/episode  : {EPISODE_STEPS}")
-        print(f"  State dim      : {STATE_DIM}")
-        print(f"  Actions/switch : {NUM_ACTIONS}")
-        print(f"  Switches       : {NUM_DIST_SWITCHES}")
-        print(f"  Mode           : {'LIVE (Ryu)' if controller else 'SIMULATION'}")
-        print("=" * 60 + "\n")
+        self._dynamic_max = np.ones(FEATURES_PER_SWITCH) * 1e-6
 
     # ------------------------------------------------------------------
 
@@ -237,6 +269,11 @@ class SDNRoutingEnv(gym.Env):
 
         self._prev_bytes.clear()
         self._prev_packets.clear()
+        self._cumulative_bytes.clear()
+        self._cumulative_packets.clear()
+
+        # Reset last applied actions
+        self._last_action.clear()
 
         zero = np.zeros(
             (NUM_DIST_SWITCHES, FEATURES_PER_SWITCH),
@@ -314,19 +351,28 @@ class SDNRoutingEnv(gym.Env):
 
             durations = []
 
+            # DEBUG: Log all flows before filtering
+            if self._step_count % 20 == 0:
+                print(f"[DEBUG] dpid={dpid}: {len(flows)} total flows in stats")
+                for i, f in enumerate(flows[:3]):  # Show first 3
+                    print(f"  Flow {i}: priority={f.get('priority')}, "
+                          f"bytes={f.get('byte_count')}, "
+                          f"packets={f.get('packet_count')}")
+
+            extracted_count = 0
+
             for flow in flows:
 
                 # ------------------------------------------------------
-                # IGNORE USELESS FLOWS
+                # RELAXED FILTERING: Accept traffic flows, skip pure ctrl
                 # ------------------------------------------------------
 
-                if flow.get('priority', 0) == 0:
-                    continue
-
+                priority = flow.get('priority', 0)
                 bc = flow.get('byte_count', 0)
                 pc = flow.get('packet_count', 0)
 
-                if bc == 0 or pc == 0:
+                # Skip only pure control rules (priority=0 with no traffic)
+                if priority == 0 and bc == 0 and pc == 0:
                     continue
 
                 duration = max(
@@ -339,22 +385,40 @@ class SDNRoutingEnv(gym.Env):
                 key = (dpid, cookie)
 
                 # ------------------------------------------------------
-                # FIXED DELTA LOGIC
+                # CUMULATIVE TRACKING: Handle rule reinstallation
+                # When OpenFlow resets counters (duration=0s), add to cumulative
                 # ------------------------------------------------------
 
                 prev_b = self._prev_bytes.get(key, bc)
                 prev_p = self._prev_packets.get(key, pc)
+                cumul_b = self._cumulative_bytes.get(key, 0)
+                cumul_p = self._cumulative_packets.get(key, 0)
 
+                # Detect rule reset: current < prev = counters were reset
+                if bc < prev_b:
+                    # Rule was reset; save the delta before reset to cumulative
+                    cumul_b += prev_b
+                    self._cumulative_bytes[key] = cumul_b
+                if pc < prev_p:
+                    cumul_p += prev_p
+                    self._cumulative_packets[key] = cumul_p
+
+                # Delta from last poll
                 delta_b = max(bc - prev_b, 0)
                 delta_p = max(pc - prev_p, 0)
 
+                # Update tracking
                 self._prev_bytes[key] = bc
                 self._prev_packets[key] = pc
+
+                # Total since training started
+                total_b = cumul_b + bc
+                total_p = cumul_p + pc
 
                 bps = delta_b / POLL_INTERVAL
                 pps = delta_p / POLL_INTERVAL
 
-                aps = bc / max(pc, 1)
+                aps = total_b / max(total_p, 1)
 
                 bytes_rates.append(bps)
                 pkt_rates.append(pps)
@@ -362,6 +426,17 @@ class SDNRoutingEnv(gym.Env):
                 pkt_sizes.append(aps)
 
                 durations.append(duration)
+
+                extracted_count += 1
+
+                # DEBUG: Log delta calculation for first few steps
+                if self._step_count <= 5:
+                    print(f"    Cookie {cookie}: bc={bc} prev={prev_b} → delta_b={delta_b} "
+                          f"→ bps={bps:.0f} | cumul={cumul_b}")
+
+            # DEBUG: Log extraction results
+            if self._step_count % 20 == 0 and extracted_count > 0:
+                print(f"  → Extracted {extracted_count} valid flows for analysis")
 
             if len(bytes_rates) == 0:
                 continue
@@ -389,6 +464,11 @@ class SDNRoutingEnv(gym.Env):
                 # packet std
                 float(np.std(pkt_rates))
             ]
+
+        # DEBUG: Summary of what was extracted
+        if self._step_count <= 5 or self._step_count % 20 == 0:
+            print(f"[STATS-SUMMARY] Step {self._step_count}: "
+                  f"sw0_bps={result[0, 0]:.0f} sw1_bps={result[1, 0]:.0f}")
 
         return result
 
@@ -448,6 +528,14 @@ class SDNRoutingEnv(gym.Env):
         bps_std = raw[:, 5]
 
         pps_std = raw[:, 6]
+
+        # DEBUG: Show raw stats before reward calculation
+        if self._step_count % 10 == 0:
+            print(f"[RAW-STATS] Step {self._step_count}:")
+            for i, row in enumerate(raw):
+                print(f"  switch {i}: bps={row[0]:.0f} pps={row[1]:.0f} "
+                      f"pkt_size={row[2]:.0f} flows={int(row[3])} "
+                      f"dur={row[4]:.1f}s")
 
         # ==========================================================
         # 1. Throughput reward
@@ -567,6 +655,15 @@ class SDNRoutingEnv(gym.Env):
 
             dpid = DIST_DPIDS[sw_idx]
 
+            # Only update rule if action changed
+            if dpid in self._last_action and self._last_action[dpid] == act:
+                if self._step_count % 50 == 0:
+                    print(f"[GYM ACTION] Step {self._step_count}: dpid={dpid} "
+                          f"action unchanged, skipping rule update")
+                continue
+
+            self._last_action[dpid] = act
+
             datapath = self.controller.datapaths.get(dpid)
 
             if datapath is None:
@@ -575,44 +672,33 @@ class SDNRoutingEnv(gym.Env):
             parser = datapath.ofproto_parser
             ofproto = datapath.ofproto
 
-            # ------------------------------------------------------
-            # REMOVE OLD RL RULES
-            # ------------------------------------------------------
+            queue_id = int(act)
 
+            # Log action
+            policy_name = QUEUE_POLICIES[queue_id]['name']
+            print(f"[GYM ACTION] Step {self._step_count}: dpid={dpid} "
+                  f"action={queue_id} policy={policy_name}")
+
+            # Create persistent cookie for this queue policy
+            cookie = 0x1000 + queue_id
+
+            # Delete previous RL rules (with any cookie)
             mod = parser.OFPFlowMod(
                 datapath=datapath,
                 command=ofproto.OFPFC_DELETE,
+                priority=RL_POLICY_PRIORITY_BASE,
                 out_port=ofproto.OFPP_ANY,
                 out_group=ofproto.OFPG_ANY,
-                priority=RL_POLICY_PRIORITY_BASE
             )
-
             datapath.send_msg(mod)
 
-            # ------------------------------------------------------
-            # APPLY NEW POLICY
-            # ------------------------------------------------------
-
-            queue_id = int(act)
-
-            # Example policy matches
-
-            if queue_id == 1:
-                # prioritize UDP / VoIP
-                match = parser.OFPMatch(
-                    eth_type=0x0800,
-                    ip_proto=17
-                )
-
-            elif queue_id == 2:
-                # prioritize video TCP
-                match = parser.OFPMatch(
-                    eth_type=0x0800,
-                    ip_proto=6
-                )
-
-            else:
-                match = parser.OFPMatch()
+            # ================================================================
+            # CRITICAL FIX: Use CATCH-ALL match, not protocol-specific
+            # ================================================================
+            # RL rules should aggregate ALL traffic and apply queue ID
+            # Do not filter by protocol — that's a feature for future work
+            # For now: measure impact of queue policies on ALL traffic
+            match = parser.OFPMatch()
 
             actions = [
                 parser.OFPActionSetQueue(queue_id),
@@ -628,9 +714,14 @@ class SDNRoutingEnv(gym.Env):
 
             flow_mod = parser.OFPFlowMod(
                 datapath=datapath,
-                priority=RL_POLICY_PRIORITY_BASE + 10,
+                cookie=cookie,
+                cookie_mask=0xffffffff,
+                priority=RL_POLICY_PRIORITY_BASE,
                 match=match,
-                instructions=inst
+                instructions=inst,
+                idle_timeout=0,      # Never expire RL rules
+                hard_timeout=0,
+                command=ofproto.OFPFC_ADD,
             )
 
             datapath.send_msg(flow_mod)
@@ -681,3 +772,109 @@ class SDNRoutingEnv(gym.Env):
             ]
 
         return result
+
+
+# ---------------------------------------------------------------------------
+# Training Loop
+# ---------------------------------------------------------------------------
+
+def run_q_learning(controller=None,
+                   total_episodes=100,
+                   save_every=25,
+                   q_table_path=None):
+    """
+    Full Q-learning training loop with auto-save.
+    
+    Parameters
+    ----------
+    controller : ClosedLoopController | None
+        Live Ryu controller instance. If None, runs in simulation mode.
+    total_episodes : int
+        Number of episodes to train.
+    save_every : int
+        Save Q-table every N episodes.
+    q_table_path : str | None
+        Path to save/load Q-table (default: data/q_table.npy)
+    """
+    if q_table_path is None:
+        q_table_path = f'{DATA_DIR}/q_table.npy'
+    
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    env = SDNRoutingEnv(controller=controller)
+    agent = QTableAgent(
+        alpha=0.1,
+        gamma=0.95,
+        epsilon=1.0,
+        epsilon_min=0.05,
+        epsilon_decay=0.999
+    )
+
+    # Resume from existing Q-table if available
+    if os.path.exists(q_table_path):
+        agent.load(q_table_path)
+
+    print("\n" + "=" * 70)
+    print("  SDN Q-Learning Training")
+    print("=" * 70)
+    print(f"  Episodes       : {total_episodes}")
+    print(f"  Steps/episode  : {EPISODE_STEPS}")
+    print(f"  State dim      : {STATE_DIM}")
+    print(f"  Num switches   : {NUM_DIST_SWITCHES}")
+    print(f"  Num actions    : {NUM_ACTIONS}")
+    print(f"  Mode           : {'LIVE (Ryu)' if controller else 'SIMULATION'}")
+    print("=" * 70 + "\n")
+
+    for episode in range(1, total_episodes + 1):
+        obs, _ = env.reset()
+        episode_reward = 0.0
+
+        for step in range(EPISODE_STEPS):
+            # Select action (epsilon-greedy)
+            action = agent.select_action(obs)
+
+            # Step environment
+            next_obs, reward, terminated, truncated, info = env.step(action)
+
+            # Update Q-table
+            agent.update(obs, action, reward, next_obs, terminated)
+
+            episode_reward += reward
+            obs = next_obs
+
+            if terminated:
+                break
+
+        agent.episode_rewards.append(episode_reward)
+
+        # Periodic save and logging
+        if episode % save_every == 0 or episode == total_episodes:
+            agent.save(q_table_path)
+
+            # Compute running average
+            recent_rewards = agent.episode_rewards[-min(10, len(agent.episode_rewards)):]
+            avg_reward = np.mean(recent_rewards) if recent_rewards else 0.0
+
+            print(
+                f"[Q-LEARNING] Episode {episode:3d}/{total_episodes} | "
+                f"reward={episode_reward:7.4f} | "
+                f"avg_10={avg_reward:7.4f} | "
+                f"epsilon={agent.epsilon:.4f} | "
+                f"q_states={len(agent.q_table):5d}"
+            )
+
+    env.close()
+    print("\n[Q-LEARNING] Training complete.\n")
+
+
+# ---------------------------------------------------------------------------
+# Standalone testing
+# ---------------------------------------------------------------------------
+
+if __name__ == '__main__':
+    # Simulation mode
+    run_q_learning(
+        controller=None,
+        total_episodes=5,
+        save_every=2
+    )
