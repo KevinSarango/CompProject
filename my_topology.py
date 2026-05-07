@@ -48,25 +48,26 @@ def configure_queues(net):
         # Configure queues on s3-eth1 (port to bottleneck)
         s3.cmd('ovs-vsctl -- set Port s3-eth1 qos=@newqos -- '
                '--id=@newqos create QoS type=linux-htb other-config:max-rate=10000000 '
-               'queues=0=@q0,1=@q1,2=@q2 -- '
+               'queues=0=@q0,1=@q1,2=@q2,3=@q3,4=@q4 -- '
                '--id=@q0 create Queue other-config:min-rate=10000000 other-config:max-rate=10000000 -- '
-               '--id=@q1 create Queue other-config:min-rate=5000000 other-config:max-rate=10000000 -- '
-               '--id=@q2 create Queue other-config:min-rate=1000000 other-config:max-rate=10000000')
-
+               '--id=@q1 create Queue other-config:min-rate=7500000 other-config:max-rate=7500000 -- '
+               '--id=@q2 create Queue other-config:min-rate=5000000 other-config:max-rate=5000000 -- '
+               '--id=@q3 create Queue other-config:min-rate=2500000 other-config:max-rate=2500000 -- '
+               '--id=@q4 create Queue other-config:min-rate=1000000 other-config:max-rate=1000000')
+        
         # Configure queues on s4-eth1 (port to bottleneck)
         s4.cmd('ovs-vsctl -- set Port s4-eth1 qos=@newqos -- '
                '--id=@newqos create QoS type=linux-htb other-config:max-rate=10000000 '
-               'queues=0=@q0,1=@q1,2=@q2 -- '
+               'queues=0=@q0,1=@q1,2=@q2,3=@q3,4=@q4 -- '
                '--id=@q0 create Queue other-config:min-rate=10000000 other-config:max-rate=10000000 -- '
-               '--id=@q1 create Queue other-config:min-rate=5000000 other-config:max-rate=10000000 -- '
-               '--id=@q2 create Queue other-config:min-rate=1000000 other-config:max-rate=10000000')
+               '--id=@q1 create Queue other-config:min-rate=7500000 other-config:max-rate=7500000 -- '
+               '--id=@q2 create Queue other-config:min-rate=5000000 other-config:max-rate=5000000 -- '
+               '--id=@q3 create Queue other-config:min-rate=2500000 other-config:max-rate=2500000 -- '
+               '--id=@q4 create Queue other-config:min-rate=1000000 other-config:max-rate=1000000')
+        
+        print("[SETUP] QoS queues configured: queue 0=10Mbps, 1=7.5Mbps, 2=5Mbps, 3=2.5Mbps, 4=1Mbps")
 
-        print("[SETUP] QoS queues configured: queue 0=10Mbps, 1=5Mbps, 2=1Mbps")
-    else:
-        print("[SETUP] WARNING: Could not find switches s3/s4 for queue config")
-
-
-def launch_bottleneck_traffic(net, num_flows=4, duration=180):
+def launch_bottleneck_traffic(net, num_flows=4, duration=3600):
     """
     Launch competing flows across the bottleneck.
     num_flows: how many concurrent flows (default 4)
@@ -74,7 +75,7 @@ def launch_bottleneck_traffic(net, num_flows=4, duration=180):
     hosts = {h.name: h for h in net.hosts}
 
     print(f"\n[TRAFFIC] Launching {num_flows} competing flows on bottleneck...")
-    print(f"[TRAFFIC] Duration: {duration}s\n")
+    print(f"[TRAFFIC] Duration: {duration}s (covers full training)\n")
 
     flow_types = ['bulk', 'video', 'voip', 'interactive']
     port = 5200
