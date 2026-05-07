@@ -58,7 +58,10 @@ def load_logs():
     
     metrics_path = _find_log_file(LOG_PATHS['metrics'])
     if metrics_path is not None:
-        data['metrics'] = pd.read_csv(metrics_path)
+        data['metrics'] = pd.read_csv(metrics_path, names=[
+            'timestamp', 'num_switches', 'num_flows', 'flow_stats_update_ms',
+            'total_duration', 'total_idle_time', 'flow_count', 'total_packet_count', 'total_byte_count'
+        ])
         print(f"✓ Loaded {metrics_path} ({len(data['metrics'])} samples)")
     else:
         print("✗ Missing rl_metrics_log.csv")
@@ -137,6 +140,13 @@ def analyze_controller_metrics(metrics_df):
     print(f"\nController overhead:")
     print(f"  Avg stats update time:   {metrics_df['flow_stats_update_ms'].mean():.2f} ms")
     print(f"  Max stats update time:   {metrics_df['flow_stats_update_ms'].max():.2f} ms")
+    
+    print(f"\nFlow statistics:")
+    print(f"  Total flow count:        {metrics_df['flow_count'].sum():.0f}")
+    print(f"  Avg total packets:       {metrics_df['total_packet_count'].mean():.0f}")
+    print(f"  Avg total bytes:         {metrics_df['total_byte_count'].mean():.0f}")
+    print(f"  Avg total duration:      {metrics_df['total_duration'].mean():.2f} s")
+    print(f"  Avg total idle time:     {metrics_df['total_idle_time'].mean():.2f} s")
     
     # Flow dynamics during learning
     if 'num_flows' in metrics_df.columns:

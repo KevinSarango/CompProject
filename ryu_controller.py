@@ -141,6 +141,7 @@ class ClosedLoopController(app_manager.RyuApp):
                 'byte_count':    stat.byte_count,
                 'duration_sec':  stat.duration_sec,
                 'duration_nsec': stat.duration_nsec,
+                'idle_timeout':  stat.idle_timeout,
                 'match':         stat.match,
                 'table_id':      stat.table_id,
             })
@@ -165,11 +166,11 @@ class ClosedLoopController(app_manager.RyuApp):
             hub.sleep(0.1)
 
             t1 = time.time()
-            features_list, _ = self._extract_features()
+            features_list, _, total_duration, total_idle_time, flow_count, total_packet_count, total_byte_count = self._extract_features()
             t2 = time.time()
             stats_ms = (t2 - t1) * 1000
 
-            self._log_metrics(len(datapaths), len(features_list), stats_ms)
+            self._log_metrics(len(datapaths), len(features_list), stats_ms, total_duration, total_idle_time, flow_count, total_packet_count, total_byte_count)
             
             if first_stats or len(features_list) > 0:
                 self.logger.info(
@@ -182,6 +183,10 @@ class ClosedLoopController(app_manager.RyuApp):
 
     def _extract_features(self):
         features_list, flow_keys = [], []
+        total_duration = 0.0
+        total_idle_time = 0.0
+        total_packet_count = 0
+        total_byte_count = 0
         with stats_lock:
             snapshot = {d: list(f) for d, f in flow_stats_db.items()}
         for dpid, flows in snapshot.items():
@@ -199,6 +204,7 @@ class ClosedLoopController(app_manager.RyuApp):
                 }
                 pkt_count  = flow['packet_count']
                 byte_count = flow['byte_count']
+                idle_time  = flow.get('idle_timeout', 0)
                 features_list.append([
                     pkt_count, byte_count,
                     delta_packets / POLL_INTERVAL,
@@ -209,7 +215,12 @@ class ClosedLoopController(app_manager.RyuApp):
                     pkt_count  / duration,
                 ])
                 flow_keys.append((dpid, flow))
-        return features_list, flow_keys
+                total_duration += duration
+                total_idle_time += idle_time
+                total_packet_count += pkt_count
+                total_byte_count += byte_count
+        flow_count = len(features_list)
+        return features_list, flow_keys, total_duration, total_idle_time, flow_count, total_packet_count, total_byte_count
 
 
 
@@ -279,14 +290,17 @@ class ClosedLoopController(app_manager.RyuApp):
             idle_timeout=idle_timeout, hard_timeout=hard_timeout,
             match=match, instructions=inst))
 
-    def _log_metrics(self, num_switches, num_flows, stats_ms):
+    def _log_metrics(self, num_switches, num_flows, stats_ms, total_duration, total_idle_time, flow_count, total_packet_count, total_byte_count):
         with open(RL_METRICS_LOG, 'a', newline='') as f:
             csv.writer(f).writerow([
                 time.time(), num_switches, num_flows,
-                round(stats_ms, 3)
+                round(stats_ms, 3), round(total_duration, 3), round(total_idle_time, 3),
+                flow_count, total_packet_count, total_byte_count
             ])
         with stats_lock:
             timing_log.append({
                 'timestamp': time.time(), 'num_flows': num_flows,
-                'stats_ms': stats_ms
+                'stats_ms': stats_ms, 'total_duration': total_duration,
+                'total_idle_time': total_idle_time, 'flow_count': flow_count,
+                'total_packet_count': total_packet_count, 'total_byte_count': total_byte_count
             })
