@@ -1,11 +1,9 @@
 """
 bottleneck_topology.py
-
 Simple bottleneck topology for RL QoS training.
 Multiple traffic types compete at a congested link.
 Much faster training than enterprise campus topology.
 """
-
 from mininet.net import Mininet
 from mininet.node import RemoteController
 from mininet.cli import CLI
@@ -14,16 +12,14 @@ from mininet.topo import Topo
 import time
 import threading
 
+
 def gen_iperf_flow(src, dst, port, flow_type, duration=120):
     """Generate iperf flow with traffic-specific parameters."""
-    # print(f"\n[IPERF] Starting {flow_type} flow: {src.name} -> {dst.name}:{port}")
-    
     # Start server
     srv_cmd = f'iperf3 -s -p {port} -D --logfile /tmp/iperf_{dst.name}_{port}.log'
-    # print(f"[IPERF] {dst.name}: {srv_cmd}")
     dst.cmd(srv_cmd)
     time.sleep(0.5)
-    
+
     # Start client with traffic-specific settings
     if flow_type == 'bulk':
         cmd = (f'iperf3 -c {dst.IP()} -p {port} -t {duration} -b 50M '
@@ -37,19 +33,17 @@ def gen_iperf_flow(src, dst, port, flow_type, duration=120):
     elif flow_type == 'interactive':
         cmd = (f'iperf3 -c {dst.IP()} -p {port} -b 1M -t {duration} '
                f'--logfile /tmp/interactive_{src.name}.log')
-    
-    # print(f"[IPERF] {src.name}: {cmd} &")
+
     src.cmd(f'{cmd} &')
-    # print(f"[IPERF] {flow_type} flow started: {src.name} -> {dst.name}:{port}")
+
 
 def configure_queues(net):
     """Configure QoS queues on bottleneck switches."""
     print("[SETUP] Configuring QoS queues on switches...")
-    
-    # Get switches
+
     s3 = net.get('s3')
     s4 = net.get('s4')
-    
+
     if s3 and s4:
         # Configure queues on s3-eth1 (port to bottleneck)
         s3.cmd('ovs-vsctl -- set Port s3-eth1 qos=@newqos -- '
@@ -58,7 +52,7 @@ def configure_queues(net):
                '--id=@q0 create Queue other-config:min-rate=10000000 other-config:max-rate=10000000 -- '
                '--id=@q1 create Queue other-config:min-rate=5000000 other-config:max-rate=10000000 -- '
                '--id=@q2 create Queue other-config:min-rate=1000000 other-config:max-rate=10000000')
-        
+
         # Configure queues on s4-eth1 (port to bottleneck)
         s4.cmd('ovs-vsctl -- set Port s4-eth1 qos=@newqos -- '
                '--id=@newqos create QoS type=linux-htb other-config:max-rate=10000000 '
@@ -66,44 +60,51 @@ def configure_queues(net):
                '--id=@q0 create Queue other-config:min-rate=10000000 other-config:max-rate=10000000 -- '
                '--id=@q1 create Queue other-config:min-rate=5000000 other-config:max-rate=10000000 -- '
                '--id=@q2 create Queue other-config:min-rate=1000000 other-config:max-rate=10000000')
-        
+
         print("[SETUP] QoS queues configured: queue 0=10Mbps, 1=5Mbps, 2=1Mbps")
     else:
         print("[SETUP] WARNING: Could not find switches s3/s4 for queue config")
 
+
+def launch_bottleneck_traffic(net, num_flows=4, duration=180):
     """
     Launch competing flows across the bottleneck.
     num_flows: how many concurrent flows (default 4)
     """
     hosts = {h.name: h for h in net.hosts}
-    
+
+    print(f"\n[TRAFFIC] Launching {num_flows} competing flows on bottleneck...")
+    print(f"[TRAFFIC] Duration: {duration}s\n")
+
     flow_types = ['bulk', 'video', 'voip', 'interactive']
     port = 5200
-    
+
     for i in range(num_flows):
         src_name = f'src{i+1}'
         dst_name = f'dst{i+1}'
         flow_type = flow_types[i % len(flow_types)]
-        
+
         src = hosts.get(src_name)
         dst = hosts.get(dst_name)
-        
+
         if src and dst:
             print(f"  [{flow_type.upper():12s}] {src_name} -> {dst_name}")
             gen_iperf_flow(src, dst, port, flow_type, duration)
             port += 1
-            time.sleep(0.5)   # increased stagger for better startup
+            time.sleep(0.5)
         else:
             print(f"[TRAFFIC] WARNING: Could not find hosts {src_name} and/or {dst_name}")
-    
-    print(f"\n[TRAFFIC] {num_flows} flows started. Competing at bottleneck link.")
-    time.sleep(2)
 
+    print(f"\n[TRAFFIC] {num_flows} flows started. Competing at bottleneck link.")
+
+
+# ------------------ Bottleneck Topology ------------------
 
 class BottleneckTopo(Topo):
     """Simple bottleneck topology for RL QoS training."""
     def __init__(self, num_flows=4, **opts):
         super().__init__(**opts)
+
         s3 = self.addSwitch('s3', dpid='0000000000000003')
         s4 = self.addSwitch('s4', dpid='0000000000000004')
 
@@ -120,10 +121,10 @@ class BottleneckTopo(Topo):
             dst = self.addHost(f'dst{i}', ip=f'10.0.0.{i+10}/24')
             self.addLink(dst, s4, bw=100)
 
+
 # ------------------ Run Network ------------------
 
 def run(num_flows=4):
-
     topo = BottleneckTopo(num_flows=num_flows)
     net = Mininet(
         topo=topo,
@@ -140,22 +141,21 @@ def run(num_flows=4):
         print(f"*** Flows    : {num_flows} competing flows")
         print(f"*** Controller: 127.0.0.1:6653")
         print("="*60 + "\n")
-        
-        print("[SETUP] Waiting for all switches to connect to controller...")
+
+        print("[SETUP] Waiting for switches to connect to controller...")
         time.sleep(3)
 
-        print("[SETUP] Testing connectivity with ping...")
+        print("[SETUP] Testing connectivity with pingall...")
         net.pingAll()
         time.sleep(2)
-        
-        print("[SETUP] Second ping test...")
+
+        print("[SETUP] Second ping to fully populate MAC tables...")
         net.pingAll()
-        
+
         print("[SETUP] Connectivity verified!")
         configure_queues(net)
+
         print("[SETUP] Starting traffic generation in background thread...\n")
-        
-        # Launch competing traffic in a thread
         t = threading.Thread(
             target=launch_bottleneck_traffic,
             args=(net,),
@@ -166,9 +166,11 @@ def run(num_flows=4):
 
         print("[SETUP] Entering CLI - type 'exit' to stop\n")
         CLI(net)
+
     finally:
         net.stop()
         print("\n*** Network stopped and cleaned up ***")
+
 
 # ------------------ Main ------------------
 
