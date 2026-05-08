@@ -114,55 +114,39 @@ def launch_bottleneck_traffic(net, num_flows=4, duration=3600):
 
 class BottleneckTopo(Topo):
     """Multi-path bottleneck topology with 4 switches forming a chain + 2 core switches."""
-    def __init__(self, num_flows=4, **opts):
+    def __init__(self, **opts):
         super().__init__(**opts)
 
-        # Create 4 edge switches connected in a chain
         s1 = self.addSwitch('s1', dpid='0000000000000001')
         s2 = self.addSwitch('s2', dpid='0000000000000002')
         s3 = self.addSwitch('s3', dpid='0000000000000003')
         s4 = self.addSwitch('s4', dpid='0000000000000004')
 
-        # Create 2 core switches
         s5 = self.addSwitch('s5', dpid='0000000000000005')
         s6 = self.addSwitch('s6', dpid='0000000000000006')
 
-        # Add 4 hosts
         h1 = self.addHost('h1', ip='10.0.0.1/24')
         h2 = self.addHost('h2', ip='10.0.0.2/24')
         h3 = self.addHost('h3', ip='10.0.0.3/24')
         h4 = self.addHost('h4', ip='10.0.0.4/24')
 
-        # Connect hosts to their corresponding switches (100 Mbps access links)
         self.addLink(h1, s1, bw=100)
         self.addLink(h2, s2, bw=100)
         self.addLink(h3, s3, bw=100)
         self.addLink(h4, s4, bw=100)
 
-        # Connect switches as specified:
-        # s1 connects to s2 and s5
         self.addLink(s1, s2, bw=10)
         self.addLink(s1, s5, bw=10)
-
-        # s2 connects to s1 and s3 (s1 already connected above)
         self.addLink(s2, s3, bw=10)
-
-        # s3 connects to s2 and s4 (s2 already connected above)
         self.addLink(s3, s4, bw=10)
-
-        # s4 connects to s3 and s6 (s3 already connected above)
         self.addLink(s4, s6, bw=10)
-
-        # s5 connects to s1 and s6 (s1 already connected above)
         self.addLink(s5, s6, bw=10)
-
-        # s6 connects to s5 and s4 (both already connected above)
 
 
 # ------------------ Run Network ------------------
 
-def run(num_flows=4):
-    topo = BottleneckTopo(num_flows=num_flows)
+def run():
+    topo = BottleneckTopo()
     net = Mininet(
         topo=topo,
         controller=lambda name: RemoteController(name, ip='127.0.0.1', port=6653),
@@ -171,40 +155,37 @@ def run(num_flows=4):
 
     try:
         net.start()
-        print("\n" + "="*60)
-        print("*** Multi-Path Bottleneck Network Started ***")
-        print("*** Switches  : 6 (s1-s4 chain + s5-s6 core)")
-        print("*** Hosts     : 4 (h1→s1, h2→s5, h3→s6, h4→s4)")
-        print("*** Bottlenecks: 5 × 10 Mbps links")
-        print("***   Path 1: s1↔s2↔s3↔s4 (primary chain)")
-        print("***   Path 2: s1↔s5↔s6↔s4 (alternate core path)")
-        print("*** Flows     : Multi-path routing possible")
-        print("*** Controller: 127.0.0.1:6653")
-        print("="*60 + "\n")
 
-        print("[SETUP] Waiting for switches to connect to controller...")
-        time.sleep(3)
+        print("\n" + "="*70)
+        print("[SETUP] Network started. Waiting for switches to connect...")
+        print("="*70)
+        time.sleep(5)
 
-        print("[SETUP] Testing connectivity with pingall...")
+        print("\n[SETUP] Testing connectivity with pingall...")
         net.pingAll()
         time.sleep(2)
 
-        print("[SETUP] Second ping to fully populate MAC tables...")
+        print("\n[SETUP] Second ping to fully populate MAC tables...")
         net.pingAll()
+        
+        print("\n[SETUP] Checking ping results...")
+        time.sleep(2)
 
-        print("[SETUP] Connectivity verified!")
+        print("\n[SETUP] Connectivity check complete!")
         configure_queues(net)
 
-        print("[SETUP] Starting traffic generation in background thread...\n")
-        t = threading.Thread(
-            target=launch_bottleneck_traffic,
-            args=(net,),
-            kwargs={'num_flows': num_flows, 'duration': 180},
-            daemon=True
-        )
-        t.start()
-
-        print("[SETUP] Entering CLI - type 'exit' to stop\n")
+        print("\n" + "="*70)
+        print("[SETUP] *** ENTERING MININET CLI ***")
+        print("[SETUP] The Ryu controller is now in MAC LEARNING PHASE (30 seconds)")
+        print("[SETUP] During this phase, run 'pingall' a few times to ensure")
+        print("[SETUP] all hosts can reach each other:")
+        print("[SETUP]   mininet> pingall")
+        print("[SETUP]   mininet> pingall")
+        print("[SETUP]")
+        print("[SETUP] After 30 seconds, the RL agent will enable routing rules.")
+        print("[SETUP] Type 'exit' to stop the network.")
+        print("="*70 + "\n")
+        
         CLI(net)
 
     finally:
@@ -215,6 +196,4 @@ def run(num_flows=4):
 # ------------------ Main ------------------
 
 if __name__ == '__main__':
-    import sys
-    num_flows = int(sys.argv[1]) if len(sys.argv) > 1 else 4
-    run(num_flows)
+    run()

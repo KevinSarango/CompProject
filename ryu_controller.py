@@ -1,12 +1,19 @@
 """
-ryu_classifier_controller.py  (pure RL agent)
+ryu_classifier_controller.py  (pure RL agent with multi-path routing)
 
-Single file passed to ryu-manager. Collects flow statistics and
-spawns the RL training thread in the same process so they share
-flow_stats_db directly without any sockets or IPC needed.
+Single file passed to ryu-manager. Collects flow statistics from all 6 switches
+in the multi-path topology and spawns the RL training thread in the same process
+so they share flow_stats_db directly without any sockets or IPC needed.
+
+Multi-path topology (6 switches):
+  - s1 (dpid=1): Decision point, routes to path1 or path2
+  - s2, s3: Path 1 intermediate switches
+  - s4 (dpid=4): Decision point, applies final QoS
+  - s5, s6: Path 2 alternate route
 
 No supervised classifier — pure reinforcement learning agent learns
-QoS policies directly from raw flow statistics and reward signals.
+QoS policies and routing decisions directly from raw flow statistics
+and reward signals that account for per-path congestion.
 
 Run with:
     ryu-manager ryu_controller.py
@@ -48,14 +55,18 @@ class ClosedLoopController(app_manager.RyuApp):
         self.datapaths    = {}
         self.mac_to_port  = {}
         self.flow_history = {}
+        self.rl_enabled   = False  # Disable RL initially to allow MAC learning
 
         # Ensure data directory exists
         os.makedirs(DATA_DIR, exist_ok=True)
 
+        # CSV header for metrics logging
+        # Monitors all 6 switches in the multi-path topology: s1-s6
         with open(RL_METRICS_LOG, 'w', newline='') as f:
             csv.writer(f).writerow([
                 'timestamp', 'num_switches', 'num_flows',
-                'flow_stats_update_ms'
+                'flow_stats_update_ms', 'total_duration', 'total_idle_time',
+                'flow_count', 'total_packet_count', 'total_byte_count'
             ])
 
         self.monitor_thread = hub.spawn(self._monitor_loop)
@@ -86,7 +97,8 @@ class ClosedLoopController(app_manager.RyuApp):
         parser   = datapath.ofproto_parser
         in_port  = msg.match['in_port']
         
-        self.logger.info(f"[PACKET_IN] dpid={datapath.id} in_port={in_port} buffer_id={msg.buffer_id}")
+        # Minimal logging during learning phase to reduce spam
+        # (debug level won't print by default)
         
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
@@ -97,24 +109,33 @@ class ClosedLoopController(app_manager.RyuApp):
         src  = eth.src
         dpid = datapath.id
         
-        self.logger.info(f"[PACKET_IN] src={src} dst={dst}")
-        
         self.mac_to_port.setdefault(dpid, {})
         self.mac_to_port[dpid][src] = in_port
         out_port = (self.mac_to_port[dpid][dst]
                     if dst in self.mac_to_port[dpid]
                     else ofproto.OFPP_FLOOD)
         actions = [parser.OFPActionOutput(out_port)]
+        
+        # Only log when learning NEW MAC addresses (installing new flow)
         if out_port != ofproto.OFPP_FLOOD:
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
             self._add_flow(datapath, 10, match, actions, idle_timeout=300)
-            self.logger.info(f"[PACKET_IN] Installed flow for {dst} out on port {out_port}")
+            
+            # Log new MAC learning
+            if self.rl_enabled:
+                self.logger.info(f"[PACKET_IN] NEW FLOW dpid={dpid}: {src} → {dst} out port {out_port}")
+            else:
+                self.logger.debug(f"[PACKET_IN] MAC_LEARNING: dpid={dpid} learned {src} from in_port {in_port}")
+        else:
+            # Flooding packets - only log at debug level
+            self.logger.debug(f"[PACKET_IN] FLOOD dpid={dpid}: {src} → {dst} (unknown destination)")
+        
+        # Send PacketOut (but don't log every one)
         data = msg.data if msg.buffer_id == ofproto.OFP_NO_BUFFER else None
         out  = parser.OFPPacketOut(
             datapath=datapath, buffer_id=msg.buffer_id,
             in_port=in_port, actions=actions, data=data)
         datapath.send_msg(out)
-        self.logger.info(f"[PACKET_IN] Sent PacketOut to port {out_port}")
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
     def flow_stats_reply_handler(self, ev):
@@ -226,14 +247,52 @@ class ClosedLoopController(app_manager.RyuApp):
 
     def _launch_rl_agent(self):
         self.logger.info("[RL] Waiting for switches to connect...")
-        # Wait until at least 2 switches connect or 60s timeout
+        # Wait until all 6 switches connect (or at least 4) or 60s timeout
+        target_switches = 6
         for _ in range(60):
             hub.sleep(1)
-            if len(self.datapaths) >= 2:
-                self.logger.info(f"[RL] {len(self.datapaths)} switches connected, starting RL...")
+            if len(self.datapaths) >= target_switches:
+                self.logger.info(f"[RL] All {len(self.datapaths)} switches connected.")
                 break
+            elif len(self.datapaths) >= 4:
+                self.logger.info(f"[RL] {len(self.datapaths)} switches connected (target: {target_switches}), "
+                               f"waiting a bit more...")
         else:
-            self.logger.warning("[RL] Timeout waiting for switches, starting anyway...")
+            self.logger.warning(f"[RL] Timeout waiting for {target_switches} switches "
+                              f"({len(self.datapaths)} connected), proceeding...")
+
+        # ====================================================================
+        # MAC LEARNING PHASE: Allow basic learning bridge to populate MAC tables
+        # This is CRITICAL before RL rules are installed
+        # ====================================================================
+        self.logger.info("\n" + "="*70)
+        self.logger.info("[RL] *** ENTERING MAC LEARNING PHASE (30 seconds) ***")
+        self.logger.info("[RL] RL rules are DISABLED during this phase.")
+        self.logger.info("[RL] Learning bridge will populate MAC tables automatically.")
+        self.logger.info("[RL]")
+        self.logger.info("[RL] IN MININET CLI, run these commands:")
+        self.logger.info("[RL]   mininet> pingall")
+        self.logger.info("[RL]   mininet> pingall")
+        self.logger.info("[RL]")
+        self.logger.info("[RL] Verify all hosts can ping each other before proceeding!")
+        self.logger.info("="*70 + "\n")
+        
+        # Keep RL disabled during learning phase (30 seconds)
+        learning_phase_duration = 30
+        for i in range(learning_phase_duration):
+            hub.sleep(1)
+            remaining = learning_phase_duration - i
+            if remaining % 10 == 0 or remaining <= 5:
+                self.logger.info(f"[RL] MAC learning phase: {remaining}s remaining...")
+        
+        # ====================================================================
+        # ENABLE RL AGENT: Now start installing routing rules
+        # ====================================================================
+        self.rl_enabled = True
+        self.logger.info("\n" + "="*70)
+        self.logger.info("[RL] MAC LEARNING PHASE COMPLETE!")
+        self.logger.info("[RL] *** ENABLING RL AGENT - INSTALLING ROUTING RULES ***")
+        self.logger.info("="*70 + "\n")
 
         try:
             from sdn_gym_env import SDNRoutingEnv, run_q_learning

@@ -62,8 +62,8 @@ from collections import defaultdict, deque
 
 DATA_DIR = 'data'
 
-NUM_DIST_SWITCHES = 2
-NUM_ACTIONS = 5
+NUM_DIST_SWITCHES = 2  # s1 (decision point) and s4 (decision point)
+NUM_ACTIONS = 10  # 5 queues × 2 paths
 
 POLL_INTERVAL = 1.0
 OBS_HISTORY = 1  # Reduced from 3 to 1 to shrink state space
@@ -71,7 +71,15 @@ EPISODE_STEPS = 20
 
 RL_POLICY_PRIORITY_BASE = 100
 
-FEATURES_PER_SWITCH = 4  # Reduced from 7 to 4: throughput, fairness proxy, active flows, duration
+# Paths through the topology
+PATHS = {
+    0: {'name': 'path1', 'description': 's1→s2→s3→s4'},
+    1: {'name': 'path2', 'description': 's1→s5→s6→s4'},
+}
+
+# Features per path: throughput, fairness, active flows, congestion
+FEATURES_PER_PATH = 4
+FEATURES_PER_SWITCH = FEATURES_PER_PATH * len(PATHS)  # 8 features per switch (4 per path)
 STATE_DIM = NUM_DIST_SWITCHES * FEATURES_PER_SWITCH * OBS_HISTORY
 
 EPS = 1e-9
@@ -86,6 +94,23 @@ QUEUE_POLICIES = {
     2: {'name': 'video_priority'},
     3: {'name': 'bulk_priority'},
     4: {'name': 'background_throttle'},
+}
+
+# ---------------------------------------------------------------------------
+# Multi-path Actions: (route, queue) combinations
+# ---------------------------------------------------------------------------
+
+MULTIPATH_ACTIONS = {
+    0: {'path': 0, 'queue': 0, 'description': 'path1 + queue0'},
+    1: {'path': 0, 'queue': 1, 'description': 'path1 + queue1'},
+    2: {'path': 0, 'queue': 2, 'description': 'path1 + queue2'},
+    3: {'path': 0, 'queue': 3, 'description': 'path1 + queue3'},
+    4: {'path': 0, 'queue': 4, 'description': 'path1 + queue4'},
+    5: {'path': 1, 'queue': 0, 'description': 'path2 + queue0'},
+    6: {'path': 1, 'queue': 1, 'description': 'path2 + queue1'},
+    7: {'path': 1, 'queue': 2, 'description': 'path2 + queue2'},
+    8: {'path': 1, 'queue': 3, 'description': 'path2 + queue3'},
+    9: {'path': 1, 'queue': 4, 'description': 'path2 + queue4'},
 }
 
 # ---------------------------------------------------------------------------
@@ -326,7 +351,12 @@ class SDNRoutingEnv(gym.Env):
         db = ctrl_mod.flow_stats_db
         lock = ctrl_mod.stats_lock
 
-        DIST_DPIDS = [3, 4]
+        # Decision points: s1 and s4
+        DIST_DPIDS = [1, 4]
+        
+        # Intermediate switches for path identification
+        PATH1_SWITCH = 2  # s2 = path1 via s2-s3
+        PATH2_SWITCH = 5  # s5 = path2 via s5-s6
 
         result = np.zeros(
             (NUM_DIST_SWITCHES, FEATURES_PER_SWITCH),
@@ -339,19 +369,28 @@ class SDNRoutingEnv(gym.Env):
                 for d, f in db.items()
             }
 
+        # Get per-path stats from intermediate switches
+        path1_stats = self._extract_path_stats(snapshot, PATH1_SWITCH)
+        path2_stats = self._extract_path_stats(snapshot, PATH2_SWITCH)
+
         for sw_idx, dpid in enumerate(DIST_DPIDS):
 
             flows = snapshot.get(dpid, [])
 
             if not flows:
+                # Use path stats if decision point has no flows
+                if dpid == 1:  # s1
+                    result[sw_idx, :FEATURES_PER_PATH] = path1_stats
+                    result[sw_idx, FEATURES_PER_PATH:] = path2_stats
                 continue
 
-            bytes_rates = []
-            pkt_rates = []
+            bytes_rates_path1 = []
+            pkt_rates_path1 = []
+            durations_path1 = []
 
-            pkt_sizes = []
-
-            durations = []
+            bytes_rates_path2 = []
+            pkt_rates_path2 = []
+            durations_path2 = []
 
             # DEBUG: Log all flows before filtering
             if self._step_count % 20 == 0:
@@ -420,14 +459,9 @@ class SDNRoutingEnv(gym.Env):
                 bps = delta_b / POLL_INTERVAL
                 pps = delta_p / POLL_INTERVAL
 
-                aps = total_b / max(total_p, 1)
-
-                bytes_rates.append(bps)
-                pkt_rates.append(pps)
-
-                pkt_sizes.append(aps)
-
-                durations.append(duration)
+                bytes_rates_path1.append(bps)
+                pkt_rates_path1.append(pps)
+                durations_path1.append(duration)
 
                 extracted_count += 1
 
@@ -440,30 +474,71 @@ class SDNRoutingEnv(gym.Env):
             if self._step_count % 20 == 0 and extracted_count > 0:
                 print(f"  → Extracted {extracted_count} valid flows for analysis")
 
-            if len(bytes_rates) == 0:
-                continue
+            # Aggregate per-path metrics
+            if len(bytes_rates_path1) > 0:
+                result[sw_idx, :FEATURES_PER_PATH] = [
+                    float(np.sum(bytes_rates_path1)),      # throughput
+                    float(len(bytes_rates_path1)),         # active flows
+                    float(np.mean(durations_path1)),       # mean duration
+                    float(np.std(bytes_rates_path1)),      # throughput std
+                ]
+            else:
+                result[sw_idx, :FEATURES_PER_PATH] = path1_stats
 
-            result[sw_idx] = [
-
-                # throughput
-                float(np.sum(bytes_rates)),
-
-                # active flows
-                float(len(bytes_rates)),
-
-                # mean duration
-                float(np.mean(durations)),
-
-                # throughput std
-                float(np.std(bytes_rates))
-            ]
+            # For s1, also include path2 stats
+            if dpid == 1:
+                result[sw_idx, FEATURES_PER_PATH:] = path2_stats
 
         # DEBUG: Summary of what was extracted
         if self._step_count <= 5 or self._step_count % 20 == 0:
             print(f"[STATS-SUMMARY] Step {self._step_count}: "
-                  f"sw0_bps={result[0, 0]:.0f} sw1_bps={result[1, 0]:.0f}")
+                  f"s1_p1_bps={result[0, 0]:.0f} s1_p2_bps={result[0, FEATURES_PER_PATH]:.0f} "
+                  f"s4_bps={result[1, 0]:.0f}")
 
         return result
+
+    # ------------------------------------------------------------------
+
+    def _extract_path_stats(self, snapshot, path_dpid):
+        """Extract stats for a specific path (via intermediate switch)."""
+        flows = snapshot.get(path_dpid, [])
+        
+        bytes_rates = []
+        durations = []
+        
+        for flow in flows:
+            bc = flow.get('byte_count', 0)
+            pc = flow.get('packet_count', 0)
+            
+            # Skip pure control flows
+            if flow.get('priority', 0) == 0 and bc == 0 and pc == 0:
+                continue
+            
+            duration = max(flow.get('duration_sec', 1), 1)
+            cookie = flow.get('cookie', 0)
+            key = (path_dpid, cookie)
+            
+            prev_b = self._prev_bytes.get(key, bc)
+            
+            if bc < prev_b:
+                self._cumulative_bytes[key] = self._cumulative_bytes.get(key, 0) + prev_b
+            
+            delta_b = max(bc - prev_b, 0)
+            self._prev_bytes[key] = bc
+            
+            bps = delta_b / POLL_INTERVAL
+            bytes_rates.append(bps)
+            durations.append(duration)
+        
+        if len(bytes_rates) == 0:
+            return np.zeros(FEATURES_PER_PATH, dtype=np.float32)
+        
+        return np.array([
+            float(np.sum(bytes_rates)),      # throughput
+            float(len(bytes_rates)),         # active flows
+            float(np.mean(durations)),       # mean duration
+            float(np.std(bytes_rates)),      # throughput std
+        ], dtype=np.float32)
 
     # ------------------------------------------------------------------
     # OBSERVATION
@@ -509,91 +584,102 @@ class SDNRoutingEnv(gym.Env):
 
         raw = self._get_raw_stats()
 
-        bps = raw[:, 0]
+        # Extract per-path metrics from s1 (decision point)
+        s1_path1_bps = raw[0, 0]
+        s1_path1_flows = raw[0, 1]
+        s1_path1_dur = raw[0, 2]
+        s1_path1_std = raw[0, 3]
 
-        active_flows = raw[:, 1]
+        s1_path2_bps = raw[0, FEATURES_PER_PATH]
+        s1_path2_flows = raw[0, FEATURES_PER_PATH + 1]
+        s1_path2_dur = raw[0, FEATURES_PER_PATH + 2]
+        s1_path2_std = raw[0, FEATURES_PER_PATH + 3]
 
-        duration = raw[:, 2]
+        # Extract metrics from s4 (exit point)
+        s4_bps = raw[1, 0]
+        s4_flows = raw[1, 1]
+        s4_std = raw[1, 3]
 
-        bps_std = raw[:, 3]
-
-        # DEBUG: Show raw stats before reward calculation
+        # DEBUG: Show per-path stats
         if self._step_count % 10 == 0:
             print(f"[RAW-STATS] Step {self._step_count}:")
-            for i, row in enumerate(raw):
-                print(f"  switch {i}: bps={row[0]:.0f} flows={int(row[1])} "
-                      f"dur={row[2]:.1f}s std={row[3]:.0f}")
+            print(f"  PATH1: bps={s1_path1_bps:.0f} flows={int(s1_path1_flows)} std={s1_path1_std:.0f}")
+            print(f"  PATH2: bps={s1_path2_bps:.0f} flows={int(s1_path2_flows)} std={s1_path2_std:.0f}")
+            print(f"  EXIT : bps={s4_bps:.0f} flows={int(s4_flows)} std={s4_std:.0f}")
 
         # ==========================================================
-        # 1. Throughput reward
+        # 1. Global Throughput reward
         # ==========================================================
 
-        total_bps = np.sum(bps)
+        total_bps = s1_path1_bps + s1_path2_bps
 
         throughput_reward = np.tanh(
-            total_bps / 1e6  # Scaled for 10Mbps network (1.25e6 bps max)
+            total_bps / 2e6  # Scaled for 10Mbps network max (2M bps = 2Mbps)
         )
 
         # ==========================================================
-        # 2. Congestion penalty
+        # 2. PATH BALANCE reward (NEW)
         # ==========================================================
-
-        mean_std = np.mean(bps_std)
-
-        congestion_penalty = np.tanh(
-            mean_std / 5e5  # Scaled for expected std in 10Mbps network
-        )
-
-        # ==========================================================
-        # 3. Fairness
-        # ==========================================================
-
+        # Reward when paths are utilized equally
+        
         if total_bps > 0:
+            path1_ratio = s1_path1_bps / (total_bps + EPS)
+            path2_ratio = s1_path2_bps / (total_bps + EPS)
+            
+            # Balance metric: 1.0 when perfectly balanced, lower otherwise
+            balance = 1.0 - abs(path1_ratio - path2_ratio)
+        else:
+            balance = 1.0
 
-            s = np.sum(bps)
+        # ==========================================================
+        # 3. BOTTLENECK CONGESTION penalty (NEW)
+        # ==========================================================
+        # Penalize if either path becomes too congested (high variance)
+        
+        max_path_std = max(s1_path1_std, s1_path2_std)
+        congestion_penalty = np.tanh(
+            max_path_std / 1e6  # Scaled for expected variance
+        )
 
-            sq = np.sum(bps ** 2)
+        # ==========================================================
+        # 4. Fairness within flows
+        # ==========================================================
 
-            fairness = (s ** 2) / (
-                NUM_DIST_SWITCHES * sq + EPS
-            )
-
+        if s4_bps > 0:
+            total_flows = s4_flows
+            
+            # Jain's fairness index approximation
+            if total_flows > 0:
+                fairness = 1.0 / (1.0 + (s4_std / (s4_bps + EPS)))
+            else:
+                fairness = 0.5
         else:
             fairness = 0.0
 
         # ==========================================================
-        # 4. Queue efficiency
+        # 5. Queue efficiency (low latency)
         # ==========================================================
 
-        mean_duration = np.mean(duration)
-
-        queue_efficiency = np.exp(
-            -mean_duration / 30.0
-        )
+        mean_duration = (s1_path1_dur + s1_path2_dur) / 2.0
+        queue_efficiency = np.exp(-mean_duration / 30.0)
 
         # ==========================================================
-        # 5. Overhead
+        # 6. Flow overhead penalty
         # ==========================================================
 
-        flow_penalty = np.tanh(
-            np.sum(active_flows) / 50.0
-        )
+        flow_penalty = np.tanh((s1_path1_flows + s1_path2_flows) / 50.0)
 
         # ==========================================================
         # FINAL REWARD
         # ==========================================================
 
         reward = (
-
-            + 0.50 * throughput_reward
-
-            + 0.20 * fairness
-
-            + 0.20 * queue_efficiency
-
-            - 0.05 * congestion_penalty
-
-            - 0.05 * flow_penalty
+            + 0.35 * throughput_reward      # Total throughput
+            + 0.25 * balance                # Path balance (NEW)
+            + 0.15 * fairness               # Flow fairness
+            + 0.15 * queue_efficiency       # Queue delay
+            - 0.05 * congestion_penalty     # Avoid congestion spikes
+            - 0.05 * flow_penalty           # Penalize excessive flows
         )
 
         reward = float(np.clip(reward, -1.0, 1.0))
@@ -603,6 +689,7 @@ class SDNRoutingEnv(gym.Env):
         print(
             f"[REWARD] "
             f"thr={throughput_reward:.3f} "
+            f"balance={balance:.3f} "
             f"fair={fairness:.3f} "
             f"queue={queue_efficiency:.3f} "
             f"cong={congestion_penalty:.3f} "
@@ -621,7 +708,16 @@ class SDNRoutingEnv(gym.Env):
         if self._sim_mode:
             return
 
-        DIST_DPIDS = [3, 4]
+        # Skip applying RL rules if RL not yet enabled (MAC learning phase)
+        if not self.controller.rl_enabled:
+            return
+
+        # Decision points: s1 (routing) and s4 (QoS)
+        DIST_DPIDS = [1, 4]
+        
+        # Port mappings for s1 (dpid=1)
+        PORT_S2 = 2   # s1-eth2 connects to s2 (path1)
+        PORT_S5 = 3   # s1-eth3 connects to s5 (path2)
 
         for sw_idx, act in enumerate(action):
 
@@ -639,22 +735,25 @@ class SDNRoutingEnv(gym.Env):
             datapath = self.controller.datapaths.get(dpid)
 
             if datapath is None:
+                print(f"[GYM ACTION] WARNING: dpid={dpid} not in controller")
                 continue
 
             parser = datapath.ofproto_parser
             ofproto = datapath.ofproto
 
-            queue_id = int(act)
+            # Decode action (route, queue) for multi-path
+            action_config = MULTIPATH_ACTIONS[int(act)]
+            path_id = action_config['path']
+            queue_id = action_config['queue']
+            action_desc = action_config['description']
 
-            # Log action
-            policy_name = QUEUE_POLICIES[queue_id]['name']
             print(f"[GYM ACTION] Step {self._step_count}: dpid={dpid} "
-                  f"action={queue_id} policy={policy_name}")
+                  f"action={act} ({action_desc})")
 
-            # Create persistent cookie for this queue policy
-            cookie = 0x1000 + queue_id
+            # Create persistent cookie
+            cookie = 0x2000 + dpid * 100 + int(act)
 
-            # Delete previous RL rules (with any cookie)
+            # Delete previous RL rules at this switch
             mod = parser.OFPFlowMod(
                 datapath=datapath,
                 command=ofproto.OFPFC_DELETE,
@@ -664,18 +763,40 @@ class SDNRoutingEnv(gym.Env):
             )
             datapath.send_msg(mod)
 
-            # ================================================================
-            # CRITICAL FIX: Use CATCH-ALL match, not protocol-specific
-            # ================================================================
-            # RL rules should aggregate ALL traffic and apply queue ID
-            # Do not filter by protocol — that's a feature for future work
-            # For now: measure impact of queue policies on ALL traffic
-            match = parser.OFPMatch()
+            # Build match and actions based on switch
+            match = parser.OFPMatch()  # Catch-all
 
-            actions = [
-                parser.OFPActionSetQueue(queue_id),
-                parser.OFPActionOutput(ofproto.OFPP_NORMAL)
-            ]
+            # ================================================================
+            # s1 (dpid=1): Apply ROUTING + QUEUE
+            # ================================================================
+            if dpid == 1:
+                
+                # Route traffic based on path selection
+                if path_id == 0:  # Path 1 (s1 → s2 → s3 → s4)
+                    out_port = PORT_S2
+                    path_desc = "path1 (→s2)"
+                else:  # Path 2 (s1 → s5 → s6 → s4)
+                    out_port = PORT_S5
+                    path_desc = "path2 (→s5)"
+
+                actions = [
+                    parser.OFPActionSetQueue(queue_id),
+                    parser.OFPActionOutput(out_port)
+                ]
+
+                print(f"  → Routing to {path_desc}, queue={queue_id}")
+
+            # ================================================================
+            # s4 (dpid=4): Apply QUEUE ONLY
+            # ================================================================
+            else:  # dpid == 4
+
+                actions = [
+                    parser.OFPActionSetQueue(queue_id),
+                    parser.OFPActionOutput(ofproto.OFPP_NORMAL)
+                ]
+
+                print(f"  → Setting queue={queue_id} at s4")
 
             inst = [
                 parser.OFPInstructionActions(
@@ -713,23 +834,30 @@ class SDNRoutingEnv(gym.Env):
 
         for i in range(NUM_DIST_SWITCHES):
 
-            throughput = rng.normal(5e8, 1e8)
+            # Path 1 metrics
+            path1_throughput = rng.normal(5e8, 1e8)
+            path1_flows = rng.integers(1, 4)
+            path1_duration = rng.normal(20, 5)
+            path1_std = rng.normal(1e8, 2e7)
 
-            flows = rng.integers(2, 8)
+            # Path 2 metrics
+            path2_throughput = rng.normal(5e8, 1e8)
+            path2_flows = rng.integers(1, 4)
+            path2_duration = rng.normal(20, 5)
+            path2_std = rng.normal(1e8, 2e7)
 
-            duration = rng.normal(20, 5)
+            result[i, :FEATURES_PER_PATH] = [
+                max(path1_throughput, 0),
+                max(path1_flows, 1),
+                max(path1_duration, 1),
+                max(path1_std, 0)
+            ]
 
-            bps_std = rng.normal(1e8, 2e7)
-
-            result[i] = [
-
-                max(throughput, 0),
-
-                max(flows, 1),
-
-                max(duration, 1),
-
-                max(bps_std, 0)
+            result[i, FEATURES_PER_PATH:] = [
+                max(path2_throughput, 0),
+                max(path2_flows, 1),
+                max(path2_duration, 1),
+                max(path2_std, 0)
             ]
 
         return result
