@@ -14,17 +14,25 @@ class DiamondTopo(Topo):
         s4 = self.addSwitch("s4", dpid="0000000000000004")
 
         for i in range(1, 5):
-            h = self.addHost(f"h{i}", ip=f"10.0.0.{i}/24", mac=f"00:00:00:00:00:0{i}")
+            h = self.addHost(
+                f"h{i}",
+                ip=f"10.0.0.{i}/24",
+                mac=f"00:00:00:00:00:0{i}",
+            )
             self.addLink(h, s1, port2=i)
 
         for i in range(5, 9):
-            h = self.addHost(f"h{i}", ip=f"10.0.0.{i}/24", mac=f"00:00:00:00:00:0{i}")
+            h = self.addHost(
+                f"h{i}",
+                ip=f"10.0.0.{i}/24",
+                mac=f"00:00:00:00:00:0{i}",
+            )
             self.addLink(h, s4, port2=i - 4)
 
-        self.addLink(s1, s2, port1=5, port2=1)
-        self.addLink(s1, s3, port1=6, port2=1)
-        self.addLink(s2, s4, port1=2, port2=5)
-        self.addLink(s3, s4, port1=2, port2=6)
+        self.addLink(s1, s2, port1=5, port2=1, bw=10, delay="5ms")
+        self.addLink(s1, s3, port1=6, port2=1, bw=10, delay="5ms")
+        self.addLink(s2, s4, port1=2, port2=5, bw=10, delay="5ms")
+        self.addLink(s3, s4, port1=2, port2=6, bw=10, delay="5ms")
 
 
 def run():
@@ -41,14 +49,14 @@ def run():
 
     net.addController("c0", controller=RemoteController, ip="127.0.0.1", port=6653)
 
-    print("*** Starting network")
+    print("*** Starting diamond topology")
     net.start()
 
     for sw in net.switches:
         sw.cmd("ovs-vsctl set Bridge %s protocols=OpenFlow13" % sw.name)
 
     print("*** Network started")
-    print("*** Type: pingall")
+    print("*** Try: pingall")
     CLI(net)
 
     print("*** Stopping network")

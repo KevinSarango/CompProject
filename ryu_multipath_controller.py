@@ -3,6 +3,7 @@ from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
 from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet, ethernet, arp
+from rl_policy import choose_path
 
 
 class SimpleSwitch13(app_manager.RyuApp):
@@ -90,7 +91,9 @@ class SimpleSwitch13(app_manager.RyuApp):
                     self.install_ipv4(4, src, dst, bottom[dst])
 
                 elif src_top and not dst_top:
-                    if dst_num % 2 == 0:
+                    path = choose_path(src, dst)
+
+                    if path == "upper":
                         self.install_ipv4(1, src, dst, 5)
                         self.install_ipv4(2, src, dst, 2)
                         self.install_ipv4(4, src, dst, bottom[dst])
@@ -100,7 +103,9 @@ class SimpleSwitch13(app_manager.RyuApp):
                         self.install_ipv4(4, src, dst, bottom[dst])
 
                 else:
-                    if src_num % 2 == 0:
+                    path = choose_path(dst, src)
+
+                    if path == "upper":
                         self.install_ipv4(4, src, dst, 5)
                         self.install_ipv4(2, src, dst, 1)
                         self.install_ipv4(1, src, dst, top[dst])
