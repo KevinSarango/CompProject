@@ -318,26 +318,23 @@ class ClosedLoopController(app_manager.RyuApp):
 
         if arp_pkt:
 
-            self.logger.info(
-                f"[ARP] {arp_pkt.src_ip} -> {arp_pkt.dst_ip}"
-            )
+            src = arp_pkt.src_ip
+            dst = arp_pkt.dst_ip
 
-            # Flood ONLY ARP packets
-            actions = [
-                parser.OFPActionOutput(ofproto.OFPP_FLOOD)
-            ]
+            if src in self.hosts and dst in self.hosts:
 
-            out = parser.OFPPacketOut(
-                datapath=datapath,
-                buffer_id=msg.buffer_id,
-                in_port=in_port,
-                actions=actions,
-                data=msg.data
-            )
+                src_sw, _ = self.hosts[src]
+                dst_sw, _ = self.hosts[dst]
 
-            datapath.send_msg(out)
+                path = self.find_path_dfs(src_sw, dst_sw)
 
-            return
+                if path:
+
+                    self.install_path(path, src, dst)
+                    self.install_path(list(reversed(path)), dst, src)
+
+                    self.forward_packet(path, msg)
+                    return
 
         # ============================================================
         # HANDLE IPV4
