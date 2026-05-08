@@ -163,11 +163,12 @@ def run():
         time.sleep(5)
 
         print("\n[SETUP] Testing connectivity with pingall...")
-        result1 = net.pingAll()
+        # Use a small timeout to keep connectivity checks fast
+        result1 = net.pingAll(timeout=2)
         time.sleep(2)
 
         print("\n[SETUP] Second ping to fully populate MAC tables...")
-        result2 = net.pingAll()
+        result2 = net.pingAll(timeout=2)
         
         print("\n[SETUP] Checking ping results...")
         time.sleep(2)

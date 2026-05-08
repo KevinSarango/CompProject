@@ -23,7 +23,7 @@ from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
 from ryu.ofproto import ofproto_v1_3
-from ryu.lib.packet import packet, ethernet, ipv4, tcp, udp
+from ryu.lib.packet import packet, ethernet, ipv4, tcp, udp, arp, ether_types
 from ryu.lib import hub
 
 import time
@@ -104,6 +104,18 @@ class ClosedLoopController(app_manager.RyuApp):
         eth = pkt.get_protocol(ethernet.ethernet)
         if eth is None:
             self.logger.debug("[PACKET_IN] No Ethernet protocol found")
+            return
+        # If this is an ARP packet, flood it immediately to speed up
+        # address resolution and avoid blocking pings while learning.
+        arp_pkt = pkt.get_protocol(arp.arp)
+        if arp_pkt is not None:
+            self.logger.debug(f"[PACKET_IN] ARP packet on dpid={datapath.id} from {arp_pkt.src_ip} to {arp_pkt.dst_ip}")
+            actions = [parser.OFPActionOutput(ofproto.OFPP_FLOOD)]
+            data = msg.data if msg.buffer_id == ofproto.OFP_NO_BUFFER else None
+            out = parser.OFPPacketOut(
+                datapath=datapath, buffer_id=msg.buffer_id,
+                in_port=in_port, actions=actions, data=data)
+            datapath.send_msg(out)
             return
         dst  = eth.dst
         src  = eth.src
