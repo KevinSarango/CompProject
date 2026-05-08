@@ -269,7 +269,9 @@ class ClosedLoopController(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
-
+        # Check if packets are coming in
+        self.logger.info(f"[PACKET_IN] Packet received from dpid={datapath.id}")
+        
         msg = ev.msg
         datapath = msg.datapath
         parser = datapath.ofproto_parser
