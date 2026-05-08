@@ -143,31 +143,83 @@ class ClosedLoopController(app_manager.RyuApp):
 
 
     @set_ev_cls(event.EventSwitchEnter)
-    def get_topology_data(self, ev):
+    def build_topology(self, ev):
 
         switch_list = get_switch(self, None)
+        links = get_link(self, None)
 
-        switches = [switch.dp.id for switch in switch_list]
+        # raw adjacency
+        graph = {}
 
-        self.logger.info(f"[TOPOLOGY] switches={switches}")
-
-        links_list = get_link(self, None)
-
-        self.adjacency = {}
-
-        for link in links_list:
+        # ------------------------------------------------------------
+        # STEP 1: build raw bidirectional graph from links
+        # ------------------------------------------------------------
+        for link in links:
 
             src = link.src
             dst = link.dst
 
-            self.adjacency.setdefault(src.dpid, {})
-            self.adjacency.setdefault(dst.dpid, {})
+            graph.setdefault(src.dpid, {})
+            graph.setdefault(dst.dpid, {})
 
-            self.adjacency[src.dpid][dst.dpid] = src.port_no
-            self.adjacency[dst.dpid][src.dpid] = dst.port_no
+            graph[src.dpid][dst.dpid] = src.port_no
+            graph[dst.dpid][src.dpid] = dst.port_no
 
-        self.logger.info(f"[TOPOLOGY] adjacency={self.adjacency}")
+        # ------------------------------------------------------------
+        # STEP 2: normalize graph (important fix for missing edges)
+        # ------------------------------------------------------------
+        self.adjacency = {}
 
+        for s in graph:
+
+            self.adjacency[s] = {}
+
+            for n in graph[s]:
+
+                self.adjacency[s][n] = graph[s][n]
+
+        self.logger.info(f"[TOPOLOGY RAW] {graph}")
+        self.logger.info(f"[TOPOLOGY CLEAN] {self.adjacency}")
+
+        # ------------------------------------------------------------
+        # STEP 3: validate connectivity using DFS
+        # ------------------------------------------------------------
+        self.validate_topology_with_dfs()
+
+    def validate_topology_with_dfs(self):
+
+        visited = set()
+
+        def dfs(node):
+
+            visited.add(node)
+
+            for neigh in self.adjacency.get(node, {}):
+
+                if neigh not in visited:
+                    dfs(neigh)
+
+        start = next(iter(self.adjacency), None)
+
+        if start is None:
+            self.logger.error("[DFS] Empty topology")
+            return
+
+        dfs(start)
+
+        expected = set(self.adjacency.keys())
+
+        missing = expected - visited
+
+        if missing:
+
+            self.logger.warning(
+                f"[DFS] Disconnected nodes detected: {missing}"
+            )
+
+        else:
+
+            self.logger.info("[DFS] Topology fully connected")
     # ================================================================
     # DFS PATH FINDER (exploratory, with backtracking)
     # ================================================================
