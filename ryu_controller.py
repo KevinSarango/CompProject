@@ -1,5 +1,5 @@
 """
-ryu_classifier_controller.py
+ryu_controller.py
 
 Simplified RL-ready SDN controller for a 5-switch multipath topology.
 
@@ -171,15 +171,18 @@ class ClosedLoopController(app_manager.RyuApp):
         self.adjacency = {}
 
         for s in graph:
+            self.adjacency[s] = dict(graph[s])
 
-            self.adjacency[s] = {}
+        # FORCE symmetry (fixes missing reverse links)
+        for s in list(self.adjacency.keys()):
+            for n, port in list(self.adjacency[s].items()):
 
-            for n in graph[s]:
+                if n not in self.adjacency:
+                    self.adjacency[n] = {}
 
-                self.adjacency[s][n] = graph[s][n]
-
-        self.logger.info(f"[TOPOLOGY RAW] {graph}")
-        self.logger.info(f"[TOPOLOGY CLEAN] {self.adjacency}")
+                if s not in self.adjacency[n]:
+                    # reverse port must exist from link discovery
+                    self.logger.warning(f"[FIX] Missing reverse edge {n}->{s}")
 
         # ------------------------------------------------------------
         # STEP 3: validate connectivity using DFS
@@ -423,7 +426,8 @@ class ClosedLoopController(app_manager.RyuApp):
     # ================================================================
 
     def install_path(self, path, src_ip, dst_ip):
-
+        if src_ip not in self.hosts or dst_ip not in self.hosts:
+            return
         self.logger.info(
             f"[FLOW] Installing path {path} "
             f"for {src_ip} -> {dst_ip}"
@@ -479,21 +483,41 @@ class ClosedLoopController(app_manager.RyuApp):
     # FORWARD FIRST PACKET
     # ================================================================
 
+    def get_next_hop(self, dpid, path):
+        """
+        Returns next switch in path given current switch.
+        """
+        if dpid not in path:
+            return None
+
+        idx = path.index(dpid)
+
+        if idx == len(path) - 1:
+            return None
+
+        return path[idx + 1]
+
     def forward_packet(self, path, msg):
 
         datapath = msg.datapath
-
         parser = datapath.ofproto_parser
 
-        first_switch = path[0]
+        current_sw = datapath.id
 
-        next_switch = path[1]
+        next_sw = self.get_next_hop(current_sw, path)
 
-        out_port = self.adjacency[first_switch][next_switch]
+        if next_sw is None:
+            return
 
-        actions = [
-            parser.OFPActionOutput(out_port)
-        ]
+        if current_sw not in self.adjacency:
+            return
+
+        if next_sw not in self.adjacency[current_sw]:
+            return
+
+        out_port = self.adjacency[current_sw][next_sw]
+
+        actions = [parser.OFPActionOutput(out_port)]
 
         out = parser.OFPPacketOut(
             datapath=datapath,
