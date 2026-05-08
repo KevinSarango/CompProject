@@ -330,6 +330,7 @@ class ClosedLoopController(app_manager.RyuApp):
         datapath = self.datapaths[dpid]
         parser   = datapath.ofproto_parser
         ofproto  = datapath.ofproto
+        self.logger.info(f"[RL] Applying action to dpid={dpid}: {action_dict}")
         try:
             match   = parser.OFPMatch(
                 eth_type=0x0800,
@@ -355,6 +356,12 @@ class ClosedLoopController(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser  = datapath.ofproto_parser
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+        # Log the flow we're installing for easy verification
+        try:
+            self.logger.info(f"[FLOW] Install dpid={datapath.id} priority={priority} "
+                             f"match={match} actions={actions} idle={idle_timeout} hard={hard_timeout}")
+        except Exception:
+            pass
         datapath.send_msg(parser.OFPFlowMod(
             datapath=datapath, priority=priority,
             idle_timeout=idle_timeout, hard_timeout=hard_timeout,
