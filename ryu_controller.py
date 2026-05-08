@@ -11,7 +11,7 @@ Multi-path topology (6 switches):
   - s4 (dpid=4): Decision point, applies final QoS
   - s5, s6: Path 2 alternate route
 
-No supervised classifier — pure reinforcement learning agent learns
+Q table-based reinforcement learning agent learns
 QoS policies and routing decisions directly from raw flow statistics
 and reward signals that account for per-path congestion.
 
@@ -69,9 +69,9 @@ class ClosedLoopController(app_manager.RyuApp):
                 'flow_count', 'total_packet_count', 'total_byte_count'
             ])
 
-        self.monitor_thread = hub.spawn(self._monitor_loop)
+        # self.monitor_thread = hub.spawn(self._monitor_loop)
 
-        self.rl_thread = hub.spawn(self._launch_rl_agent)
+        # self.rl_thread = hub.spawn(self._launch_rl_agent)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -102,34 +102,27 @@ class ClosedLoopController(app_manager.RyuApp):
         
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
-        if eth is None:
-            self.logger.debug("[PACKET_IN] No Ethernet protocol found")
-            return
+
         dst  = eth.dst
         src  = eth.src
         dpid = datapath.id
         
         self.mac_to_port.setdefault(dpid, {})
         self.mac_to_port[dpid][src] = in_port
+
+        # self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
+        
         out_port = (self.mac_to_port[dpid][dst]
                     if dst in self.mac_to_port[dpid]
                     else ofproto.OFPP_FLOOD)
+        
         actions = [parser.OFPActionOutput(out_port)]
         
         # Only log when learning NEW MAC addresses (installing new flow)
         if out_port != ofproto.OFPP_FLOOD:
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
-            self._add_flow(datapath, 10, match, actions, idle_timeout=300)
-            
-            # Log new MAC learning
-            if self.rl_enabled:
-                self.logger.info(f"[PACKET_IN] NEW FLOW dpid={dpid}: {src} → {dst} out port {out_port}")
-            else:
-                self.logger.debug(f"[PACKET_IN] MAC_LEARNING: dpid={dpid} learned {src} from in_port {in_port}")
-        else:
-            # Flooding packets - only log at debug level
-            self.logger.debug(f"[PACKET_IN] FLOOD dpid={dpid}: {src} → {dst} (unknown destination)")
-        
+            self._add_flow(datapath, 1, match, actions)
+
         # Send PacketOut (but don't log every one)
         data = msg.data if msg.buffer_id == ofproto.OFP_NO_BUFFER else None
         out  = parser.OFPPacketOut(
@@ -325,6 +318,16 @@ class ClosedLoopController(app_manager.RyuApp):
 
     def apply_rl_action(self, action_dict):
         dpid = action_dict['dpid']
+
+        #Ignore RL actions until MAC learning phase is complete and rl_enabled is True
+        if not getattr(self, 'rl_enabled', False):
+            try:
+                self.logger.debug(f"[RL] Ignoring action for dpid={dpid} because RL agent is not enabled yet.")
+            except Exception:
+                pass
+            return
+        
+
         if dpid not in self.datapaths:
             return
         datapath = self.datapaths[dpid]
@@ -356,12 +359,7 @@ class ClosedLoopController(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser  = datapath.ofproto_parser
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-        # Log the flow we're installing for easy verification
-        try:
-            self.logger.info(f"[FLOW] Install dpid={datapath.id} priority={priority} "
-                             f"match={match} actions={actions} idle={idle_timeout} hard={hard_timeout}")
-        except Exception:
-            pass
+
         datapath.send_msg(parser.OFPFlowMod(
             datapath=datapath, priority=priority,
             idle_timeout=idle_timeout, hard_timeout=hard_timeout,

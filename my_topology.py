@@ -135,10 +135,10 @@ class BottleneckTopo(Topo):
         h3 = self.addHost('h3', ip='10.0.0.3/24')
         h4 = self.addHost('h4', ip='10.0.0.4/24')
 
-        self.addLink(h1, s1, bw=100)
-        self.addLink(h2, s2, bw=100)
-        self.addLink(h3, s3, bw=100)
-        self.addLink(h4, s4, bw=100)
+        self.addLink(h1, s1, bw=20)
+        self.addLink(h2, s2, bw=20)
+        self.addLink(h3, s3, bw=20)
+        self.addLink(h4, s4, bw=20)
 
         self.addLink(s1, s2, bw=10)
         self.addLink(s1, s5, bw=10)
@@ -160,7 +160,11 @@ def run():
         link=TCLink
     )
 
+    # Print controller connection info
+    print("\nRemote controller configured at", net.controllers[0])
     try:
+        net.build()
+        
         net.start()
 
         print("\n" + "="*70)
@@ -170,11 +174,11 @@ def run():
 
         print("\n[SETUP] Testing connectivity with pingall...")
         # Use a small timeout to keep connectivity checks fast
-        result1 = net.pingAll(timeout=2)
+        result1 = net.pingAll(timeout=3)
         time.sleep(2)
 
         print("\n[SETUP] Second ping to fully populate MAC tables...")
-        result2 = net.pingAll(timeout=2)
+        result2 = net.pingAll(timeout=5)
         
         print("\n[SETUP] Checking ping results...")
         time.sleep(2)
