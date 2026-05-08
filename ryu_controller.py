@@ -91,6 +91,7 @@ class ClosedLoopController(app_manager.RyuApp):
         self.datapaths = {}
         self.hosts = {}
         self.adjacency = {}
+        self.mac_to_port = {}
 
         self.paths = {
             "main": [1, 2, 3, 4],
@@ -270,75 +271,59 @@ class ClosedLoopController(app_manager.RyuApp):
     def packet_in_handler(self, ev):
 
         msg = ev.msg
-
         datapath = msg.datapath
-
         parser = datapath.ofproto_parser
         ofproto = datapath.ofproto
-
+        dpid = datapath.id
         in_port = msg.match['in_port']
 
         pkt = packet.Packet(msg.data)
-
         eth = pkt.get_protocol(ethernet.ethernet)
 
         if eth is None:
             return
 
-        # Ignore LLDP
-        if eth.ethertype == ether_types.ETH_TYPE_LLDP:
-            return
+        dst = eth.dst
+        src = eth.src
 
-        dpid = datapath.id
+        self.mac_to_port.setdefault(dpid, {})
+        self.mac_to_port[dpid][src] = in_port
 
-        arp_pkt = pkt.get_protocol(arp.arp)
+        # ------------------------------------------------------------
+        # 1. L2 LEARNING SWITCH BEHAVIOR (REQUIRED FOR ARP + PING)
+        # ------------------------------------------------------------
+
+        if dst in self.mac_to_port[dpid]:
+
+            out_port = self.mac_to_port[dpid][dst]
+
+        else:
+
+            out_port = ofproto.OFPP_FLOOD
+
+        actions = [parser.OFPActionOutput(out_port)]
+
+        # install basic L2 rule (IMPORTANT)
+        match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
+
+        self._add_flow(datapath, 1, match, actions)
+
+        # send packet
+        out = parser.OFPPacketOut(
+            datapath=datapath,
+            buffer_id=msg.buffer_id,
+            in_port=in_port,
+            actions=actions,
+            data=msg.data
+        )
+
+        datapath.send_msg(out)
+
+        # ------------------------------------------------------------
+        # 2. ONLY AFTER L2 WORKS → RUN L3 PATH LOGIC FOR IP
+        # ------------------------------------------------------------
 
         ip_pkt = pkt.get_protocol(ipv4.ipv4)
-
-        # ============================================================
-        # LEARN HOST LOCATIONS
-        # ============================================================
-
-        if arp_pkt:
-
-            self.hosts[arp_pkt.src_ip] = (dpid, in_port)
-
-            self.logger.info(
-                f"[HOST] Learned {arp_pkt.src_ip} "
-                f"at switch={dpid} port={in_port}"
-            )
-
-        if ip_pkt:
-
-            self.hosts[ip_pkt.src] = (dpid, in_port)
-
-        # ============================================================
-        # HANDLE ARP
-        # ============================================================
-
-        if arp_pkt:
-
-            src = arp_pkt.src_ip
-            dst = arp_pkt.dst_ip
-
-            if src in self.hosts and dst in self.hosts:
-
-                src_sw, _ = self.hosts[src]
-                dst_sw, _ = self.hosts[dst]
-
-                path = self.find_path_dfs(src_sw, dst_sw)
-
-                if path:
-
-                    self.install_path(path, src, dst)
-                    self.install_path(list(reversed(path)), dst, src)
-
-                    self.forward_packet(path, msg)
-                    return
-
-        # ============================================================
-        # HANDLE IPV4
-        # ============================================================
 
         if not ip_pkt:
             return
@@ -346,18 +331,18 @@ class ClosedLoopController(app_manager.RyuApp):
         src_ip = ip_pkt.src
         dst_ip = ip_pkt.dst
 
-        self.logger.info(
-            f"[IP] {src_ip} -> {dst_ip}"
-        )
-
-        # Destination unknown
-        if dst_ip not in self.hosts:
-
-            self.logger.warning(
-                f"[IP] Unknown destination host {dst_ip}"
-            )
-
+        if src_ip not in self.hosts or dst_ip not in self.hosts:
             return
+
+        src_sw, _ = self.hosts[src_ip]
+        dst_sw, _ = self.hosts[dst_ip]
+
+        path = self.find_path_dfs(src_sw, dst_sw)
+
+        if path:
+
+            self.install_path(path, src_ip, dst_ip)
+            self.install_path(list(reversed(path)), dst_ip, src_ip)
 
         # ============================================================
         # PATH SELECTION
