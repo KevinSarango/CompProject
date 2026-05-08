@@ -40,6 +40,9 @@ from ryu.controller.handler import (
 )
 from ryu.ofproto import ofproto_v1_3
 
+from ryu.topology import event
+from ryu.topology.api import get_switch, get_link
+
 from ryu.lib.packet import (
     packet,
     ethernet,
@@ -85,68 +88,11 @@ class ClosedLoopController(app_manager.RyuApp):
         super().__init__(*args, **kwargs)
 
         self.datapaths = {}
-
-        self.flow_history = {}
-
-        self.rl_enabled = False
-
-        # ------------------------------------------------------------
-        # HOST TRACKING
-        # host_ip -> (switch_dpid, port)
-        # ------------------------------------------------------------
-
         self.hosts = {}
-
-        # ------------------------------------------------------------
-        # STATIC TOPOLOGY PORT MAP
-        #
-        # VERIFY PORTS USING:
-        # ovs-ofctl show s1
-        # ovs-ofctl show s2
-        # etc.
-        # ------------------------------------------------------------
-
-        self.adjacency = {
-
-            # s1
-            1: {
-                2: 2,
-                5: 3
-            },
-
-            # s2
-            2: {
-                1: 2,
-                3: 3
-            },
-
-            # s3
-            3: {
-                2: 2,
-                4: 3
-            },
-
-            # s4
-            4: {
-                3: 2,
-                5: 3
-            },
-
-            # s5
-            5: {
-                1: 2,
-                4: 3
-            }
-        }
-
-        # ------------------------------------------------------------
-        # PREDEFINED VALID PATHS
-        # ------------------------------------------------------------
+        self.adjacency = {}
 
         self.paths = {
-
             "main": [1, 2, 3, 4],
-
             "alt": [1, 5, 4]
         }
 
@@ -176,18 +122,10 @@ class ClosedLoopController(app_manager.RyuApp):
     def switch_features_handler(self, ev):
 
         datapath = ev.msg.datapath
-
-        ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
+        ofproto = datapath.ofproto
 
         self.datapaths[datapath.id] = datapath
-
-        self.logger.info(f"[SWITCH] Connected dpid={datapath.id}")
-
-        # ------------------------------------------------------------
-        # TABLE MISS RULE
-        # Send unknown packets to controller
-        # ------------------------------------------------------------
 
         match = parser.OFPMatch()
 
@@ -198,13 +136,36 @@ class ClosedLoopController(app_manager.RyuApp):
             )
         ]
 
-        self._add_flow(
-            datapath=datapath,
-            priority=0,
-            match=match,
-            actions=actions
-        )
+        self.add_flow(datapath, 0, match, actions)
 
+        self.logger.info(f"[SWITCH] Connected dpid={datapath.id}")
+
+
+    @set_ev_cls(event.EventSwitchEnter)
+    def get_topology_data(self, ev):
+
+        switch_list = get_switch(self, None)
+
+        switches = [switch.dp.id for switch in switch_list]
+
+        self.logger.info(f"[TOPOLOGY] switches={switches}")
+
+        links_list = get_link(self, None)
+
+        self.adjacency = {}
+
+        for link in links_list:
+
+            src = link.src
+            dst = link.dst
+
+            self.adjacency.setdefault(src.dpid, {})
+            self.adjacency.setdefault(dst.dpid, {})
+
+            self.adjacency[src.dpid][dst.dpid] = src.port_no
+            self.adjacency[dst.dpid][src.dpid] = dst.port_no
+
+        self.logger.info(f"[TOPOLOGY] adjacency={self.adjacency}")
     # ================================================================
     # PACKET IN
     # ================================================================

@@ -46,7 +46,7 @@ def configure_queues(net):
     """Configure QoS queues on all core and bottleneck links."""
     print("[SETUP] Configuring QoS queues on all switches...")
 
-    switches = ['s1', 's2', 's3', 's4', 's5', 's6']
+    switches = ['s1', 's2', 's3', 's4', 's5']
     
     for sw_name in switches:
         sw = net.get(sw_name)
@@ -128,7 +128,7 @@ class BottleneckTopo(Topo):
         s4 = self.addSwitch('s4', dpid='0000000000000004')
 
         s5 = self.addSwitch('s5', dpid='0000000000000005')
-        s6 = self.addSwitch('s6', dpid='0000000000000006')
+        # s6 = self.addSwitch('s6', dpid='0000000000000006')
 
         h1 = self.addHost('h1', ip='10.0.0.1/24')
         h2 = self.addHost('h2', ip='10.0.0.2/24')
@@ -143,11 +143,11 @@ class BottleneckTopo(Topo):
         self.addLink(s1, s2, bw=10)
         self.addLink(s1, s5, bw=10)
         self.addLink(s2, s3, bw=10)
-        self.addLink(s2, s5, bw=10)
-        self.addLink(s3, s6, bw=10)
+        self.addLink(s4, s5, bw=10)
+        # self.addLink(s3, s6, bw=10)
         self.addLink(s3, s4, bw=10)
-        self.addLink(s4, s6, bw=10)
-        self.addLink(s5, s6, bw=10)
+        # self.addLink(s4, s6, bw=10)
+        # self.addLink(s5, s6, bw=10)
 
 
 # ------------------ Run Network ------------------
@@ -163,8 +163,6 @@ def run():
     # Print controller connection info
     print("\nRemote controller configured at", net.controllers[0])
     try:
-        net.build()
-        
         net.start()
 
         print("\n" + "="*70)
