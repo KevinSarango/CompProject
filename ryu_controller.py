@@ -23,7 +23,7 @@ from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
 from ryu.ofproto import ofproto_v1_3
-from ryu.lib.packet import packet, ethernet, ipv4, tcp, udp, arp, ether_types
+from ryu.lib.packet import packet, ethernet, ipv4, tcp, udp
 from ryu.lib import hub
 
 import time
@@ -101,62 +101,40 @@ class ClosedLoopController(app_manager.RyuApp):
         # (debug level won't print by default)
         
         pkt = packet.Packet(msg.data)
-        # follow simple_switch_13: get the first ethernet proto
-        eth = pkt.get_protocols(ethernet.ethernet)[0]
+        eth = pkt.get_protocol(ethernet.ethernet)
         if eth is None:
             self.logger.debug("[PACKET_IN] No Ethernet protocol found")
             return
-
-        # ignore LLDP
-        if eth.ethertype == ether_types.ETH_TYPE_LLDP:
-            return
-
-        dst = eth.dst
-        src = eth.src
+        dst  = eth.dst
+        src  = eth.src
         dpid = datapath.id
-
+        
         self.mac_to_port.setdefault(dpid, {})
-        # learn a mac address to avoid FLOOD next time.
         self.mac_to_port[dpid][src] = in_port
-
-        # If this is an ARP packet, flood it immediately to speed up
-        # address resolution and avoid blocking pings while learning.
-        if eth.ethertype == ether_types.ETH_TYPE_ARP:
-            self.logger.debug(f"[PACKET_IN] ARP packet on dpid={dpid} from {src}")
-            actions = [parser.OFPActionOutput(ofproto.OFPP_FLOOD)]
-            data = None
-            if msg.buffer_id == ofproto.OFP_NO_BUFFER:
-                data = msg.data
-            out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                      in_port=in_port, actions=actions, data=data)
-            datapath.send_msg(out)
-            return
-
-        if dst in self.mac_to_port[dpid]:
-            out_port = self.mac_to_port[dpid][dst]
-        else:
-            out_port = ofproto.OFPP_FLOOD
-
+        out_port = (self.mac_to_port[dpid][dst]
+                    if dst in self.mac_to_port[dpid]
+                    else ofproto.OFPP_FLOOD)
         actions = [parser.OFPActionOutput(out_port)]
-
-        # install a flow to avoid packet_in next time
+        
+        # Only log when learning NEW MAC addresses (installing new flow)
         if out_port != ofproto.OFPP_FLOOD:
-            match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
-            # if buffer_id is valid, avoid sending both flow_mod & packet_out
-            if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                self._add_flow(datapath, 10, match, actions, idle_timeout=300, buffer_id=msg.buffer_id)
-                return
+            match = parser.OFPMatch(in_port=in_port, eth_dst=dst)
+            self._add_flow(datapath, 10, match, actions, idle_timeout=300)
+            
+            # Log new MAC learning
+            if self.rl_enabled:
+                self.logger.info(f"[PACKET_IN] NEW FLOW dpid={dpid}: {src} → {dst} out port {out_port}")
             else:
-                self._add_flow(datapath, 10, match, actions, idle_timeout=300)
+                self.logger.debug(f"[PACKET_IN] MAC_LEARNING: dpid={dpid} learned {src} from in_port {in_port}")
         else:
+            # Flooding packets - only log at debug level
             self.logger.debug(f"[PACKET_IN] FLOOD dpid={dpid}: {src} → {dst} (unknown destination)")
-
-        data = None
-        if msg.buffer_id == ofproto.OFP_NO_BUFFER:
-            data = msg.data
-
-        out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                  in_port=in_port, actions=actions, data=data)
+        
+        # Send PacketOut (but don't log every one)
+        data = msg.data if msg.buffer_id == ofproto.OFP_NO_BUFFER else None
+        out  = parser.OFPPacketOut(
+            datapath=datapath, buffer_id=msg.buffer_id,
+            in_port=in_port, actions=actions, data=data)
         datapath.send_msg(out)
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
@@ -373,20 +351,14 @@ class ClosedLoopController(app_manager.RyuApp):
             datapath.ofproto_parser.OFPFlowStatsRequest(datapath))
 
     def _add_flow(self, datapath, priority, match, actions,
-                  idle_timeout=0, hard_timeout=0, buffer_id=None):
+                  idle_timeout=0, hard_timeout=0):
         ofproto = datapath.ofproto
         parser  = datapath.ofproto_parser
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-        if buffer_id:
-            mod = parser.OFPFlowMod(datapath=datapath, buffer_id=buffer_id,
-                                    priority=priority,
-                                    idle_timeout=idle_timeout, hard_timeout=hard_timeout,
-                                    match=match, instructions=inst)
-        else:
-            mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
-                                    idle_timeout=idle_timeout, hard_timeout=hard_timeout,
-                                    match=match, instructions=inst)
-        datapath.send_msg(mod)
+        datapath.send_msg(parser.OFPFlowMod(
+            datapath=datapath, priority=priority,
+            idle_timeout=idle_timeout, hard_timeout=hard_timeout,
+            match=match, instructions=inst))
 
     def _log_metrics(self, num_switches, num_flows, stats_ms, total_duration, total_idle_time, flow_count, total_packet_count, total_byte_count):
         with open(RL_METRICS_LOG, 'a', newline='') as f:

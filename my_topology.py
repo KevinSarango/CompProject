@@ -16,7 +16,8 @@ import os
 
 def gen_iperf_flow(src, dst, port, flow_type, duration=120):
     """Generate iperf flow with traffic-specific parameters."""
-    # Start server
+    # Ensure no stale iperf3 server is running on this port, then start server
+    dst.cmd(f'pkill -f "iperf3 -s -p {port}" 2>/dev/null')
     srv_cmd = f'iperf3 -s -p {port} -D --logfile /tmp/iperf_{dst.name}_{port}.log'
     dst.cmd(srv_cmd)
     time.sleep(0.5)
@@ -34,6 +35,9 @@ def gen_iperf_flow(src, dst, port, flow_type, duration=120):
     elif flow_type == 'interactive':
         cmd = (f'iperf3 -c {dst.IP()} -p {port} -b 1M -t {duration} '
                f'--logfile /tmp/interactive_{src.name}.log')
+    else:
+        # Unknown flow type — skip
+        return
 
     src.cmd(f'{cmd} &')
 
