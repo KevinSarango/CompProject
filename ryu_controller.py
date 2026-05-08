@@ -62,6 +62,7 @@ import csv
 import os
 import sys
 import traceback
+import random
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -166,6 +167,46 @@ class ClosedLoopController(app_manager.RyuApp):
             self.adjacency[dst.dpid][src.dpid] = dst.port_no
 
         self.logger.info(f"[TOPOLOGY] adjacency={self.adjacency}")
+
+    # ================================================================
+    # DFS PATH FINDER (exploratory, with backtracking)
+    # ================================================================
+
+    def find_path_dfs(self, start, goal, visited=None, path=None):
+        """
+        Depth-first search with backtracking to find any path from start to goal.
+        Neighbors are visited in random order to encourage exploration (not shortest path).
+
+        Returns a list of dpids representing the path, or None if no path found.
+        """
+
+        if visited is None:
+            visited = set()
+        if path is None:
+            path = []
+
+        visited.add(start)
+        path.append(start)
+
+        if start == goal:
+            return path.copy()
+
+        # Get neighbor dpids from adjacency mapping
+        neighbors = list(self.adjacency.get(start, {}).keys())
+
+        # Randomize exploration order to avoid deterministic shortest-path bias
+        random.shuffle(neighbors)
+
+        for nbr in neighbors:
+            if nbr in visited:
+                continue
+            res = self.find_path_dfs(nbr, goal, visited, path)
+            if res:
+                return res
+
+        # Backtrack
+        path.pop()
+        return None
     # ================================================================
     # PACKET IN
     # ================================================================
@@ -270,16 +311,25 @@ class ClosedLoopController(app_manager.RyuApp):
         # PATH SELECTION
         # ============================================================
 
-        # Simple deterministic routing for now.
-        # RL can later replace this logic.
+        # Attempt exploratory DFS-based path discovery first (may return any path).
+        # This is intentionally exploratory (randomized neighbor order) and not
+        # guaranteed to be the shortest path. If DFS fails, fall back to the
+        # existing deterministic static paths.
 
-        if src_ip == "10.0.0.1" and dst_ip == "10.0.0.4":
+        path = None
+        try:
+            src_sw, _ = self.hosts[src_ip]
+            dst_sw, _ = self.hosts[dst_ip]
+            path = self.find_path_dfs(src_sw, dst_sw)
+        except Exception:
+            path = None
 
-            path = self.paths["alt"]
-
-        else:
-
-            path = self.paths["main"]
+        if path is None:
+            # Fallback deterministic behavior
+            if src_ip == "10.0.0.1" and dst_ip == "10.0.0.4":
+                path = self.paths["alt"]
+            else:
+                path = self.paths["main"]
 
         self.logger.info(
             f"[PATH] {src_ip} -> {dst_ip} using {path}"
