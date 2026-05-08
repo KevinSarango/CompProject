@@ -38,39 +38,43 @@ def gen_iperf_flow(src, dst, port, flow_type, duration=120):
 
 
 def configure_queues(net):
-    """Configure QoS queues on bottleneck switches."""
-    print("[SETUP] Configuring QoS queues on switches...")
+    """Configure QoS queues on all core and bottleneck links."""
+    print("[SETUP] Configuring QoS queues on all switches...")
 
-    s3 = net.get('s3')
-    s4 = net.get('s4')
-
-    if s3 and s4:
-        # Configure queues on s3-eth1 (port to bottleneck)
-        s3.cmd('ovs-vsctl -- set Port s3-eth1 qos=@newqos -- '
-               '--id=@newqos create QoS type=linux-htb other-config:max-rate=10000000 '
-               'queues=0=@q0,1=@q1,2=@q2,3=@q3,4=@q4 -- '
-               '--id=@q0 create Queue other-config:min-rate=10000000 other-config:max-rate=10000000 -- '
-               '--id=@q1 create Queue other-config:min-rate=7500000 other-config:max-rate=7500000 -- '
-               '--id=@q2 create Queue other-config:min-rate=5000000 other-config:max-rate=5000000 -- '
-               '--id=@q3 create Queue other-config:min-rate=2500000 other-config:max-rate=2500000 -- '
-               '--id=@q4 create Queue other-config:min-rate=1000000 other-config:max-rate=1000000')
+    switches = ['s1', 's2', 's3', 's4', 's5', 's6']
+    
+    for sw_name in switches:
+        sw = net.get(sw_name)
+        if not sw:
+            continue
         
-        # Configure queues on s4-eth1 (port to bottleneck)
-        s4.cmd('ovs-vsctl -- set Port s4-eth1 qos=@newqos -- '
-               '--id=@newqos create QoS type=linux-htb other-config:max-rate=10000000 '
-               'queues=0=@q0,1=@q1,2=@q2,3=@q3,4=@q4 -- '
-               '--id=@q0 create Queue other-config:min-rate=10000000 other-config:max-rate=10000000 -- '
-               '--id=@q1 create Queue other-config:min-rate=7500000 other-config:max-rate=7500000 -- '
-               '--id=@q2 create Queue other-config:min-rate=5000000 other-config:max-rate=5000000 -- '
-               '--id=@q3 create Queue other-config:min-rate=2500000 other-config:max-rate=2500000 -- '
-               '--id=@q4 create Queue other-config:min-rate=1000000 other-config:max-rate=1000000')
+        # Get all outgoing ports (skip local port 65534)
+        ports = [str(i) for i in range(1, 10)]  # Assume max 9 ports per switch
         
-        print("[SETUP] QoS queues configured: queue 0=10Mbps, 1=7.5Mbps, 2=5Mbps, 3=2.5Mbps, 4=1Mbps")
+        for port_num in ports:
+            port_name = f'{sw_name}-eth{port_num}'
+            
+            try:
+                # Configure queues on this port
+                sw.cmd(f'ovs-vsctl -- set Port {sw_name}-eth{port_num} qos=@newqos -- '
+                       '--id=@newqos create QoS type=linux-htb other-config:max-rate=10000000 '
+                       'queues=0=@q0,1=@q1,2=@q2,3=@q3,4=@q4 -- '
+                       '--id=@q0 create Queue other-config:min-rate=10000000 other-config:max-rate=10000000 -- '
+                       '--id=@q1 create Queue other-config:min-rate=7500000 other-config:max-rate=7500000 -- '
+                       '--id=@q2 create Queue other-config:min-rate=5000000 other-config:max-rate=5000000 -- '
+                       '--id=@q3 create Queue other-config:min-rate=2500000 other-config:max-rate=2500000 -- '
+                       '--id=@q4 create Queue other-config:min-rate=1000000 other-config:max-rate=1000000')
+            except Exception as e:
+                pass  # Port may not exist, skip silently
+    
+    print("[SETUP] QoS queues configured on all switches: "
+          "queue 0=10Mbps, 1=7.5Mbps, 2=5Mbps, 3=2.5Mbps, 4=1Mbps")
 
 def launch_bottleneck_traffic(net, num_flows=4, duration=3600):
     """
     Launch competing flows across the bottleneck.
-    num_flows: how many concurrent flows (default 4)
+    Uses the 4 hosts in the topology.
+    num_flows: how many flows to generate between hosts (default 4)
     """
     hosts = {h.name: h for h in net.hosts}
 
@@ -79,48 +83,80 @@ def launch_bottleneck_traffic(net, num_flows=4, duration=3600):
 
     flow_types = ['bulk', 'video', 'voip', 'interactive']
     port = 5200
+    
+    # Generate flows between all pairs of hosts
+    host_list = ['h1', 'h2', 'h3', 'h4']
+    
+    flow_count = 0
+    for i, src_name in enumerate(host_list):
+        for dst_name in host_list[i+1:]:
+            if flow_count >= num_flows:
+                break
+            
+            flow_type = flow_types[flow_count % len(flow_types)]
+            src = hosts.get(src_name)
+            dst = hosts.get(dst_name)
 
-    for i in range(num_flows):
-        src_name = f'src{i+1}'
-        dst_name = f'dst{i+1}'
-        flow_type = flow_types[i % len(flow_types)]
+            if src and dst:
+                print(f"  [{flow_type.upper():12s}] {src_name} -> {dst_name}")
+                gen_iperf_flow(src, dst, port, flow_type, duration)
+                port += 1
+                flow_count += 1
+                time.sleep(0.5)
+        
+        if flow_count >= num_flows:
+            break
 
-        src = hosts.get(src_name)
-        dst = hosts.get(dst_name)
-
-        if src and dst:
-            print(f"  [{flow_type.upper():12s}] {src_name} -> {dst_name}")
-            gen_iperf_flow(src, dst, port, flow_type, duration)
-            port += 1
-            time.sleep(0.5)
-        else:
-            print(f"[TRAFFIC] WARNING: Could not find hosts {src_name} and/or {dst_name}")
-
-    print(f"\n[TRAFFIC] {num_flows} flows started. Competing at bottleneck link.")
+    print(f"\n[TRAFFIC] {flow_count} flows started. Competing on multiple bottleneck links.")
 
 
-# ------------------ Bottleneck Topology ------------------
+# ------------------ Multi-Path Bottleneck Topology ------------------
 
 class BottleneckTopo(Topo):
-    """Simple bottleneck topology for RL QoS training."""
+    """Multi-path bottleneck topology with 4 switches forming a chain + 2 core switches."""
     def __init__(self, num_flows=4, **opts):
         super().__init__(**opts)
 
+        # Create 4 edge switches connected in a chain
+        s1 = self.addSwitch('s1', dpid='0000000000000001')
+        s2 = self.addSwitch('s2', dpid='0000000000000002')
         s3 = self.addSwitch('s3', dpid='0000000000000003')
         s4 = self.addSwitch('s4', dpid='0000000000000004')
 
-        # Bottleneck link
+        # Create 2 core switches
+        s5 = self.addSwitch('s5', dpid='0000000000000005')
+        s6 = self.addSwitch('s6', dpid='0000000000000006')
+
+        # Add 4 hosts
+        h1 = self.addHost('h1', ip='10.0.0.1/24')
+        h2 = self.addHost('h2', ip='10.0.0.2/24')
+        h3 = self.addHost('h3', ip='10.0.0.3/24')
+        h4 = self.addHost('h4', ip='10.0.0.4/24')
+
+        # Connect hosts to their corresponding switches (100 Mbps access links)
+        self.addLink(h1, s1, bw=100)
+        self.addLink(h2, s2, bw=100)
+        self.addLink(h3, s3, bw=100)
+        self.addLink(h4, s4, bw=100)
+
+        # Connect switches as specified:
+        # s1 connects to s2 and s5
+        self.addLink(s1, s2, bw=10)
+        self.addLink(s1, s5, bw=10)
+
+        # s2 connects to s1 and s3 (s1 already connected above)
+        self.addLink(s2, s3, bw=10)
+
+        # s3 connects to s2 and s4 (s2 already connected above)
         self.addLink(s3, s4, bw=10)
 
-        # Source hosts connect to s3
-        for i in range(1, num_flows + 1):
-            src = self.addHost(f'src{i}', ip=f'10.0.0.{i}/24')
-            self.addLink(src, s3, bw=100)
+        # s4 connects to s3 and s6 (s3 already connected above)
+        self.addLink(s4, s6, bw=10)
 
-        # Destination hosts connect to s4
-        for i in range(1, num_flows + 1):
-            dst = self.addHost(f'dst{i}', ip=f'10.0.0.{i+10}/24')
-            self.addLink(dst, s4, bw=100)
+        # s5 connects to s1 and s6 (s1 already connected above)
+        self.addLink(s5, s6, bw=10)
+
+        # s6 connects to s5 and s4 (both already connected above)
 
 
 # ------------------ Run Network ------------------
@@ -136,11 +172,14 @@ def run(num_flows=4):
     try:
         net.start()
         print("\n" + "="*60)
-        print("*** Bottleneck Network Started ***")
-        print(f"*** Switches : 2 core switches with 10 Mbps bottleneck link")
-        print(f"*** Hosts    : {num_flows*2} ({num_flows} sources + {num_flows} destinations)")
-        print(f"*** Flows    : {num_flows} competing flows")
-        print(f"*** Controller: 127.0.0.1:6653")
+        print("*** Multi-Path Bottleneck Network Started ***")
+        print("*** Switches  : 6 (s1-s4 chain + s5-s6 core)")
+        print("*** Hosts     : 4 (h1→s1, h2→s5, h3→s6, h4→s4)")
+        print("*** Bottlenecks: 5 × 10 Mbps links")
+        print("***   Path 1: s1↔s2↔s3↔s4 (primary chain)")
+        print("***   Path 2: s1↔s5↔s6↔s4 (alternate core path)")
+        print("*** Flows     : Multi-path routing possible")
+        print("*** Controller: 127.0.0.1:6653")
         print("="*60 + "\n")
 
         print("[SETUP] Waiting for switches to connect to controller...")
