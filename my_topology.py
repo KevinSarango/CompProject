@@ -228,8 +228,6 @@ def run():
         print("[SETUP] Type 'exit' to stop the network.")
         print("="*70 + "\n")
         
-        CLI(net)
-
     finally:
         net.stop()
         print("\n*** Network stopped and cleaned up ***")
