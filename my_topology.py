@@ -11,6 +11,7 @@ from mininet.link import TCLink
 from mininet.topo import Topo
 import time
 import threading
+import os
 
 
 def gen_iperf_flow(src, dst, port, flow_type, duration=120):
@@ -162,16 +163,48 @@ def run():
         time.sleep(5)
 
         print("\n[SETUP] Testing connectivity with pingall...")
-        net.pingAll()
+        result1 = net.pingAll()
         time.sleep(2)
 
         print("\n[SETUP] Second ping to fully populate MAC tables...")
-        net.pingAll()
+        result2 = net.pingAll()
         
         print("\n[SETUP] Checking ping results...")
         time.sleep(2)
 
-        print("\n[SETUP] Connectivity check complete!")
+        # Verify all pings succeeded
+        if result1 != 0.0 or result2 != 0.0:
+            print("\n[WARNING] Not all pings succeeded!")
+            print(f"  First pingAll packet loss: {result1*100:.1f}%")
+            print(f"  Second pingAll packet loss: {result2*100:.1f}%")
+            print("[WARNING] Retrying connectivity check...")
+            
+            # Retry up to 3 times
+            for attempt in range(3):
+                print(f"\n[SETUP] Retry {attempt + 1}/3...")
+                time.sleep(2)
+                result = net.pingAll()
+                print(f"  Packet loss: {result*100:.1f}%")
+                if result == 0.0:
+                    print("[SUCCESS] All hosts can reach each other!")
+                    break
+            else:
+                print("\n[ERROR] Connectivity check failed after 3 retries!")
+                print("[ERROR] Some hosts cannot reach each other. Check your topology.")
+                net.stop()
+                return
+
+        print("\n[SETUP] ✓ Connectivity check complete - all hosts can reach each other!")
+
+        # Create a signal file so external processes (e.g. the Ryu controller)
+        # can detect that connectivity has been verified and proceed.
+        try:
+            signal_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'connectivity_verified.txt')
+            with open(signal_path, 'w') as sf:
+                sf.write('OK')
+            print(f"[SETUP] Connectivity signal written: {signal_path}")
+        except Exception as e:
+            print(f"[WARN] Failed to write connectivity signal: {e}")
         configure_queues(net)
 
         print("\n" + "="*70)

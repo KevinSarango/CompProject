@@ -277,13 +277,24 @@ class ClosedLoopController(app_manager.RyuApp):
         self.logger.info("[RL] Verify all hosts can ping each other before proceeding!")
         self.logger.info("="*70 + "\n")
         
-        # Keep RL disabled during learning phase (30 seconds)
+        # Keep RL disabled during learning phase (default 30 seconds).
+        # Prefer an explicit signal file created by the topology when connectivity
+        # is verified. Fall back to a timeout if the file doesn't appear.
         learning_phase_duration = 30
-        for i in range(learning_phase_duration):
+        signal_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'connectivity_verified.txt')
+        self.logger.info(f"[RL] Waiting for connectivity signal file at {signal_path} (timeout {learning_phase_duration}s)...")
+        waited = 0
+        while waited < learning_phase_duration:
+            if os.path.exists(signal_path):
+                self.logger.info("[RL] Connectivity signal found — skipping remaining learning delay.")
+                break
             hub.sleep(1)
-            remaining = learning_phase_duration - i
+            waited += 1
+            remaining = learning_phase_duration - waited
             if remaining % 10 == 0 or remaining <= 5:
                 self.logger.info(f"[RL] MAC learning phase: {remaining}s remaining...")
+        else:
+            self.logger.info("[RL] No connectivity signal found; proceeding after learning timeout.")
         
         # ====================================================================
         # ENABLE RL AGENT: Now start installing routing rules
