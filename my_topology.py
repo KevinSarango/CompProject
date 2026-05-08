@@ -5,7 +5,7 @@ Multiple traffic types compete at a congested link.
 Much faster training than enterprise campus topology.
 """
 from mininet.net import Mininet
-from mininet.node import RemoteController
+from mininet.node import Controller, RemoteController
 from mininet.cli import CLI
 from mininet.link import TCLink
 from mininet.topo import Topo
@@ -143,6 +143,8 @@ class BottleneckTopo(Topo):
         self.addLink(s1, s2, bw=10)
         self.addLink(s1, s5, bw=10)
         self.addLink(s2, s3, bw=10)
+        self.addLink(s2, s5, bw=10)
+        self.addLink(s3, s6, bw=10)
         self.addLink(s3, s4, bw=10)
         self.addLink(s4, s6, bw=10)
         self.addLink(s5, s6, bw=10)
@@ -154,7 +156,7 @@ def run():
     topo = BottleneckTopo()
     net = Mininet(
         topo=topo,
-        controller=lambda name: RemoteController(name, ip='127.0.0.1', port=6653),
+        controller=RemoteController,
         link=TCLink
     )
 
