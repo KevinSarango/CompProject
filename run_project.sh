@@ -43,7 +43,7 @@ echo "ryu-manager --verbose ryu_fifo_controller.py"
 echo
 echo "Terminal 2:"
 echo "cd $PROJECT_DIR"
-echo "sudo python3 diamond_topology.py"
+echo "sudo python3 diamond_topology.py --policy FIFO"
 echo
 echo "FIFO decisions saved to data/fifo_metrics.csv"
 echo
@@ -62,7 +62,7 @@ echo "ryu-manager --verbose ryu_rl_controller.py"
 echo
 echo "Terminal 2:"
 echo "cd $PROJECT_DIR"
-echo "sudo python3 diamond_topology.py"
+echo "sudo python3 diamond_topology.py --policy RL"
 echo
 echo "RL decisions saved to data/rl_metrics.csv"
 echo

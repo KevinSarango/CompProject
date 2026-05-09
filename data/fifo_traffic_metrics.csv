@@ -1,0 +1,7 @@
+policy,src,dst,throughput_mbps,latency_ms,packet_loss_percent
+FIFO,h1,h5,9.51,22.567,0.0
+FIFO,h1,h6,9.51,20.5,0.0
+FIFO,h2,h7,9.49,21.967,0.0
+FIFO,h3,h8,9.52,22.324,0.0
+FIFO,h4,h5,9.47,22.938,0.0
+FIFO,h2,h6,9.51,21.929,0.0

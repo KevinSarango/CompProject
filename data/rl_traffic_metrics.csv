@@ -1,0 +1,7 @@
+policy,src,dst,throughput_mbps,latency_ms,packet_loss_percent
+RL,h1,h5,9.5,21.919,0.0
+RL,h1,h6,9.51,21.428,0.0
+RL,h2,h7,9.5,22.354,0.0
+RL,h3,h8,9.5,22.389,0.0
+RL,h4,h5,9.52,21.955,0.0
+RL,h2,h6,9.52,21.71,0.0

@@ -5,6 +5,8 @@ from mininet.link import TCLink
 from mininet.cli import CLI
 from mininet.log import setLogLevel
 from mininet_traffic import run_tests
+from automated_traffic_tests import run_automated_tests
+import argparse
 import time
 
 
@@ -37,7 +39,7 @@ class DiamondTopo(Topo):
         self.addLink(s3, s4, port1=2, port2=6, bw=10, delay="5ms")
 
 
-def run():
+def run(policy_name=None):
     topo = DiamondTopo()
 
     net = Mininet(
@@ -62,6 +64,9 @@ def run():
     # Wait for controller rules to install
     time.sleep(3)
 
+    if policy_name:
+        run_automated_tests(net, policy_name)
+
     # Automatically run tests
     run_tests(net)
 
@@ -73,5 +78,9 @@ def run():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--policy", choices=["FIFO", "RL"], default=None)
+    args = parser.parse_args()
+
     setLogLevel("info")
-    run()
+    run(policy_name=args.policy)
