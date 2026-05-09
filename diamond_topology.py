@@ -4,6 +4,8 @@ from mininet.topo import Topo
 from mininet.link import TCLink
 from mininet.cli import CLI
 from mininet.log import setLogLevel
+from mininet_traffic import run_tests
+import time
 
 
 class DiamondTopo(Topo):
@@ -56,7 +58,14 @@ def run():
         sw.cmd("ovs-vsctl set Bridge %s protocols=OpenFlow13" % sw.name)
 
     print("*** Network started")
-    print("*** Try: pingall")
+
+    # Wait for controller rules to install
+    time.sleep(3)
+
+    # Automatically run tests
+    run_tests(net)
+
+    # Drop into Mininet CLI afterward
     CLI(net)
 
     print("*** Stopping network")

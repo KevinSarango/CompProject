@@ -5,6 +5,13 @@ import os
 import matplotlib.pyplot as plt
 
 
+PLOTS_DIR = "data/plots"
+
+
+def ensure_directories():
+    os.makedirs(PLOTS_DIR, exist_ok=True)
+
+
 def read_rewards():
     episodes = []
     total_rewards = []
@@ -12,6 +19,7 @@ def read_rewards():
 
     with open("data/training_rewards.csv", "r") as f:
         reader = csv.DictReader(f)
+
         for row in reader:
             episodes.append(int(row["episode"]))
             total_rewards.append(float(row["total_reward"]))
@@ -28,14 +36,22 @@ def plot_rewards():
     plt.xlabel("Episode")
     plt.ylabel("Total Reward")
     plt.title("RL Training: Total Reward per Episode")
-    plt.savefig("data/reward_curve_total.png", bbox_inches="tight")
+
+    total_path = os.path.join(PLOTS_DIR, "reward_curve_total.png")
+
+    plt.savefig(total_path, bbox_inches="tight")
+    plt.close()
 
     plt.figure()
     plt.plot(episodes, average_rewards)
     plt.xlabel("Episode")
     plt.ylabel("Average Reward")
     plt.title("RL Training: Average Reward per Episode")
-    plt.savefig("data/reward_curve_average.png", bbox_inches="tight")
+
+    average_path = os.path.join(PLOTS_DIR, "reward_curve_average.png")
+
+    plt.savefig(average_path, bbox_inches="tight")
+    plt.close()
 
 
 def plot_q_table():
@@ -43,29 +59,49 @@ def plot_q_table():
         q_table = json.load(f)
 
     states = sorted(q_table.keys(), key=int)
+
     upper_values = [q_table[s]["0"] for s in states]
     lower_values = [q_table[s]["1"] for s in states]
 
     x = range(len(states))
 
     plt.figure()
-    plt.bar([i - 0.2 for i in x], upper_values, width=0.4, label="upper")
-    plt.bar([i + 0.2 for i in x], lower_values, width=0.4, label="lower")
+
+    plt.bar(
+        [i - 0.2 for i in x],
+        upper_values,
+        width=0.4,
+        label="upper path",
+    )
+
+    plt.bar(
+        [i + 0.2 for i in x],
+        lower_values,
+        width=0.4,
+        label="lower path",
+    )
+
     plt.xticks(list(x), [f"state {s}" for s in states])
+
     plt.xlabel("State")
     plt.ylabel("Q-value")
     plt.title("Learned Q-table Values")
+
     plt.legend()
-    plt.savefig("data/q_table_values.png", bbox_inches="tight")
+
+    qtable_path = os.path.join(PLOTS_DIR, "q_table_values.png")
+
+    plt.savefig(qtable_path, bbox_inches="tight")
+    plt.close()
 
 
 if __name__ == "__main__":
-    os.makedirs("data", exist_ok=True)
+    ensure_directories()
 
     plot_rewards()
     plot_q_table()
 
-    print("Saved graphs:")
-    print("- data/reward_curve_total.png")
-    print("- data/reward_curve_average.png")
-    print("- data/q_table_values.png")
+    print("Saved plots:")
+    print(f"- {PLOTS_DIR}/reward_curve_total.png")
+    print(f"- {PLOTS_DIR}/reward_curve_average.png")
+    print(f"- {PLOTS_DIR}/q_table_values.png")

@@ -54,8 +54,3 @@ if __name__ == "__main__":
 
     print_summary("FIFO", fifo)
     print_summary("RL", rl)
-
-    print()
-    print("Use this in the report:")
-    print("FIFO is the baseline flow assignment policy.")
-    print("RL uses an offline-trained Q-table to choose between paths.")
