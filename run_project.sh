@@ -8,39 +8,41 @@ echo " Multipath SDN RL Project Instructions"
 echo "========================================="
 echo
 
-echo "Professor's step-by-step:"
-echo "1. Use FIFO with multipath topology as baseline"
-echo "2. Train RL only in Gym environment"
-echo "3. Load trained agent/policy into Ryu"
-echo "4. Evaluate FIFO vs RL"
+echo "Professor workflow:"
+echo "1. FIFO baseline with multipath topology"
+echo "2. RL training only in Gym environment"
+echo "3. Export Q-table / policy"
+echo "4. Load policy into Ryu"
+echo "5. Evaluate FIFO vs RL"
 echo
 
 echo "========================================="
-echo " Step 0: Optional cleanup"
+echo " Step 1: Train RL model"
 echo "========================================="
-echo "Run before starting a new demo:"
-echo
-echo "cd $PROJECT_DIR"
-echo "sudo mn -c"
-echo
-
-echo "========================================="
-echo " Step 1: Train RL agent offline"
-echo "========================================="
-echo "Run this first:"
-echo
 echo "cd $PROJECT_DIR"
 echo "python3 train_rl_agent.py"
 echo
 echo "This creates:"
 echo "- data/q_table.json"
 echo "- data/training_rewards.csv"
+echo "- data/training_steps.csv"
 echo
 
 echo "========================================="
-echo " Step 2: FIFO baseline demo"
+echo " Step 2: Generate training graphs"
 echo "========================================="
+echo "cd $PROJECT_DIR"
+echo "python3 plot_training_results.py"
 echo
+echo "This creates:"
+echo "- data/reward_curve_total.png"
+echo "- data/reward_curve_average.png"
+echo "- data/q_table_values.png"
+echo
+
+echo "========================================="
+echo " Step 3: FIFO baseline"
+echo "========================================="
 echo "Terminal 1:"
 echo "cd $PROJECT_DIR"
 echo "sudo mn -c"
@@ -53,24 +55,22 @@ echo "sudo python3 diamond_topology.py"
 echo
 echo "Inside Mininet:"
 echo "pingall"
-echo "h1 ping -c 10 h5"
-echo "h1 ping -c 10 h6"
-echo "h2 ping -c 10 h7"
-echo "h3 ping -c 10 h8"
+echo "h1 ping -c 20 h5"
+echo "h1 ping -c 20 h6"
+echo "h1 ping -c 50 h5 &"
+echo "h2 ping -c 50 h6 &"
+echo "h3 ping -c 50 h7 &"
+echo "h4 ping -c 50 h8 &"
 echo "sh ovs-ofctl -O OpenFlow13 dump-flows s1"
 echo
-echo "FIFO results saved to:"
-echo "data/fifo_metrics.csv"
+echo "FIFO decisions saved to data/fifo_metrics.csv"
 echo
 
 echo "========================================="
-echo " Step 3: RL controller demo"
+echo " Step 4: RL controller"
 echo "========================================="
-echo
-echo "Stop Mininet first:"
-echo "exit"
-echo
-echo "Then stop Ryu with CTRL+C."
+echo "Stop Mininet with: exit"
+echo "Stop Ryu with: CTRL+C"
 echo
 echo "Terminal 1:"
 echo "cd $PROJECT_DIR"
@@ -84,34 +84,31 @@ echo "sudo python3 diamond_topology.py"
 echo
 echo "Inside Mininet:"
 echo "pingall"
-echo "h1 ping -c 10 h5"
-echo "h1 ping -c 10 h6"
-echo "h2 ping -c 10 h7"
-echo "h3 ping -c 10 h8"
+echo "h1 ping -c 20 h5"
+echo "h1 ping -c 20 h6"
+echo "h1 ping -c 50 h5 &"
+echo "h2 ping -c 50 h6 &"
+echo "h3 ping -c 50 h7 &"
+echo "h4 ping -c 50 h8 &"
 echo "sh ovs-ofctl -O OpenFlow13 dump-flows s1"
 echo
-echo "RL results saved to:"
-echo "data/rl_metrics.csv"
+echo "RL decisions saved to data/rl_metrics.csv"
 echo
 
 echo "========================================="
-echo " Step 4: Evaluate"
+echo " Step 5: Evaluate FIFO vs RL"
 echo "========================================="
-echo
-echo "After running both FIFO and RL:"
-echo
 echo "cd $PROJECT_DIR"
 echo "python3 eval_fifo_vs_rl.py"
 echo
 
 echo "========================================="
-echo " What to say in the demo"
+echo " Files to screenshot for report"
 echo "========================================="
-echo
-echo "The topology is a fixed diamond multipath topology."
-echo "FIFO is our baseline controller."
-echo "The RL agent is trained offline in a Gym-style environment."
-echo "Ryu does not train the model."
-echo "Ryu only loads the learned policy and installs OpenFlow rules."
-echo "We evaluate FIFO vs RL using path usage, connectivity, and flow logs."
+echo "- data/reward_curve_total.png"
+echo "- data/reward_curve_average.png"
+echo "- data/q_table_values.png"
+echo "- pingall output"
+echo "- dump-flows s1 output"
+echo "- eval_fifo_vs_rl.py output"
 echo
