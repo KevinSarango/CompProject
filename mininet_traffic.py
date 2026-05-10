@@ -1,9 +1,44 @@
 import time
 
+from config import PINGALL_ATTEMPTS, PINGALL_RETRY_WAIT_SECONDS
+
+
+def run_pingall_with_retries(net):
+    print()
+    print("====================================")
+    print(" Checking connectivity with pingall")
+    print("====================================")
+
+    for attempt in range(1, PINGALL_ATTEMPTS + 1):
+        print(f"[PINGALL] Attempt {attempt}/{PINGALL_ATTEMPTS}")
+
+        loss = net.pingAll()
+
+        try:
+            loss_value = float(loss)
+        except (TypeError, ValueError):
+            loss_value = 100.0
+
+        if loss_value == 0.0:
+            print("[PINGALL] Success: 0% packet loss")
+            return True
+
+        print(f"[PINGALL] Failed attempt {attempt}: {loss_value}% packet loss")
+
+        if attempt < PINGALL_ATTEMPTS:
+            print(f"[PINGALL] Retrying in {PINGALL_RETRY_WAIT_SECONDS} seconds...")
+            time.sleep(PINGALL_RETRY_WAIT_SECONDS)
+
+    print("[PINGALL] Failed after all attempts.")
+    return False
+
 
 def run_tests(net):
     """
-    Automatically runs traffic experiments inside Mininet.
+    Automatically runs simple traffic experiments inside Mininet.
+
+    This file is no longer the main TrafPy experiment path, but it is kept
+    for manual/basic testing.
     """
 
     print("\n====================================")
@@ -15,8 +50,9 @@ def run_tests(net):
     h3 = net.get("h3")
     h4 = net.get("h4")
 
-    print("[1] Running pingall...\n")
-    net.pingAll()
+    if not run_pingall_with_retries(net):
+        print("[ERROR] pingall failed. Exiting basic traffic test.")
+        return False
 
     print("\n[2] Sequential traffic tests...\n")
 
@@ -47,3 +83,5 @@ def run_tests(net):
     print("\n====================================")
     print(" Automated Tests Complete")
     print("====================================\n")
+
+    return True

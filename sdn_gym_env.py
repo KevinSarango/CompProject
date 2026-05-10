@@ -1,13 +1,15 @@
 import csv
 import os
 
+from config import LOAD_BALANCE_LIMIT_KB, LOAD_DECAY_FACTOR
+
 
 class SimpleSDNEnv:
     """
     Demand-driven SDN environment.
 
-    The RL agent trains on the same traffic demand trace that is later replayed
-    in Mininet.
+    The RL agent trains on the same TrafPy-style demand trace that is later
+    replayed in Mininet.
 
     Actions:
         0 = upper path: s1 -> s2 -> s4
@@ -21,6 +23,12 @@ class SimpleSDNEnv:
 
     Reward:
         Uses normalized packet loss, delay, throughput, and action impact.
+
+    Reward weights:
+        packet loss   = 2.0
+        delay         = 1.5
+        throughput    = 1.0
+        action impact = 1.0
     """
 
     def __init__(self, demand_file="data/trafpy_demands.csv"):
@@ -32,26 +40,23 @@ class SimpleSDNEnv:
         self.upper_load = 0.0
         self.lower_load = 0.0
 
-        # Capacity is in KB because the demand file uses size_kb.
-        # Increased from 2500 to avoid making every later flow catastrophic.
-        self.path_capacity_kb = 3000.0
+        # One shared load-balancing limit for both paths.
+        self.load_balance_limit_kb = LOAD_BALANCE_LIMIT_KB
 
-        # Faster decay means old flows finish faster in the training simulation.
-        self.decay_factor = 0.85
+        # Shared decay factor.
+        self.decay_factor = LOAD_DECAY_FACTOR
 
         # Reward weights.
         self.gamma_packet_loss = 2.0
-        self.gamma_delay = 1.0
+        self.gamma_delay = 1.5
         self.gamma_throughput = 1.0
         self.gamma_action_impact = 1.0
-
-        # Makes reward easier to interpret.
-        self.base_reward = 1.0
 
     def load_demands(self):
         if not os.path.exists(self.demand_file):
             raise FileNotFoundError(
-                f"{self.demand_file} not found. Run python3 generate_trafpy_demands.py first."
+                f"{self.demand_file} not found. "
+                f"Run python3 generate_trafpy_demands.py first."
             )
 
         demands = []
@@ -84,8 +89,8 @@ class SimpleSDNEnv:
         return value / max_value
 
     def get_state(self):
-        upper_util = self.upper_load / self.path_capacity_kb
-        lower_util = self.lower_load / self.path_capacity_kb
+        upper_util = self.upper_load / self.load_balance_limit_kb
+        lower_util = self.lower_load / self.load_balance_limit_kb
 
         busy_threshold = 0.70
         balanced_threshold = 0.15
@@ -110,14 +115,12 @@ class SimpleSDNEnv:
 
         return 2
 
-    def calculate_action_impact(self, selected_load, other_load):
+    def calculate_action_impact(self, selected_util, other_util):
         """
-        Approximate causal/action influence.
-
-        Positive means selected path was better than the alternative.
-        Negative means selected path was worse.
+        Positive if the selected path is less utilized than the alternative.
+        Negative if the selected path is worse.
         """
-        impact = (other_load - selected_load) / self.path_capacity_kb
+        impact = other_util - selected_util
 
         if impact > 1.0:
             return 1.0
@@ -134,38 +137,45 @@ class SimpleSDNEnv:
         demand = self.demands[self.current_index]
         flow_size = demand["size_kb"]
 
-        # Existing load decays to simulate previous flows completing.
         self.upper_load *= self.decay_factor
         self.lower_load *= self.decay_factor
 
         if action == 0:
             selected_path = "upper"
             self.upper_load += flow_size
+
             selected_load = self.upper_load
             other_load = self.lower_load
         else:
             selected_path = "lower"
             self.lower_load += flow_size
+
             selected_load = self.lower_load
             other_load = self.upper_load
 
-        selected_util = selected_load / self.path_capacity_kb
+        selected_util = selected_load / self.load_balance_limit_kb
+        other_util = other_load / self.load_balance_limit_kb
 
         raw_delay = selected_util * 100.0
         raw_packet_loss = max(0.0, selected_util - 1.0) * 100.0
-        raw_throughput = max(0.0, self.path_capacity_kb - selected_load)
+        raw_throughput = max(0.0, self.load_balance_limit_kb - selected_load)
 
         normalized_delay = self.normalize(raw_delay, 100.0)
         normalized_packet_loss = self.normalize(raw_packet_loss, 100.0)
-        normalized_throughput = self.normalize(raw_throughput, self.path_capacity_kb)
-
-        action_impact = self.calculate_action_impact(
-            selected_load=selected_load,
-            other_load=other_load,
+        normalized_throughput = self.normalize(
+            raw_throughput,
+            self.load_balance_limit_kb,
         )
 
+        action_impact = self.calculate_action_impact(
+            selected_util=selected_util,
+            other_util=other_util,
+        )
+
+        base_reward = 1.0
+
         reward = (
-            self.base_reward
+            base_reward
             - self.gamma_packet_loss * normalized_packet_loss
             - self.gamma_delay * normalized_delay
             + self.gamma_throughput * normalized_throughput

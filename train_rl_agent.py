@@ -72,7 +72,6 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
             while not done:
                 state_key = str(state)
 
-                # Epsilon-greedy action selection.
                 if random.random() < epsilon:
                     action = random.choice(ACTIONS)
                 else:
@@ -141,8 +140,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
                     f"Epsilon={epsilon:.4f}"
                 )
 
-            # Epsilon decay: more exploration early, more exploitation later.
-            epsilon = max(0.05, epsilon * 0.997)
+            epsilon = max(0.05, epsilon * 0.995)
 
     with open("data/q_table.json", "w") as f:
         json.dump(q_table, f, indent=4)

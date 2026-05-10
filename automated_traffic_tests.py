@@ -3,6 +3,8 @@ import os
 import re
 import time
 
+from config import PINGALL_ATTEMPTS, PINGALL_RETRY_WAIT_SECONDS
+
 
 DEMAND_FILE = "data/trafpy_demands.csv"
 
@@ -76,63 +78,39 @@ def load_demands():
     return demands
 
 
-def clean_old_logs(net):
+def cleanup_logs(net):
     for host in net.hosts:
         host.cmd("rm -f /tmp/iperf_client_*.log /tmp/iperf_server_*.log /tmp/ping_*.log")
-        host.cmd("pkill -f iperf 2>/dev/null")
-        host.cmd("pkill -f ping 2>/dev/null")
 
 
-def start_iperf_server(net, dst_name, flow_id, port):
-    dst = net.get(dst_name)
-    dst.cmd(f"iperf -s -p {port} > /tmp/iperf_server_{flow_id}.log 2>&1 &")
+def run_pingall_with_retries(net):
+    print()
+    print("====================================")
+    print(" Checking connectivity with pingall")
+    print("====================================")
 
+    for attempt in range(1, PINGALL_ATTEMPTS + 1):
+        print(f"[PINGALL] Attempt {attempt}/{PINGALL_ATTEMPTS}")
 
-def start_iperf_client(net, src_name, dst_name, flow_id, port, size_kb):
-    src = net.get(src_name)
-    dst_ip = host_ip(dst_name)
+        loss = net.pingAll()
 
-    size_bytes = int(size_kb * 1024)
+        try:
+            loss_value = float(loss)
+        except (TypeError, ValueError):
+            loss_value = 100.0
 
-    src.cmd(
-        f"iperf -c {dst_ip} -p {port} -n {size_bytes} "
-        f"> /tmp/iperf_client_{flow_id}.log 2>&1 &"
-    )
+        if loss_value == 0.0:
+            print("[PINGALL] Success: 0% packet loss")
+            return True
 
+        print(f"[PINGALL] Failed attempt {attempt}: {loss_value}% packet loss")
 
-def start_ping_probe(net, src_name, dst_name, flow_id):
-    src = net.get(src_name)
-    dst_ip = host_ip(dst_name)
+        if attempt < PINGALL_ATTEMPTS:
+            print(f"[PINGALL] Retrying in {PINGALL_RETRY_WAIT_SECONDS} seconds...")
+            time.sleep(PINGALL_RETRY_WAIT_SECONDS)
 
-    src.cmd(
-        f"ping -c 5 {dst_ip} "
-        f"> /tmp/ping_{flow_id}.log 2>&1 &"
-    )
-
-
-def read_host_file(net, host_name, path):
-    host = net.get(host_name)
-    return host.cmd(f"cat {path} 2>/dev/null")
-
-
-def wait_for_traffic_to_finish(net, timeout=60):
-    start = time.time()
-
-    while time.time() - start < timeout:
-        still_running = False
-
-        for host in net.hosts:
-            output = host.cmd("pgrep -f 'iperf -c|ping -c 5' 2>/dev/null")
-            if output.strip():
-                still_running = True
-                break
-
-        if not still_running:
-            return
-
-        time.sleep(0.5)
-
-    print("[WARN] Traffic timeout reached. Continuing anyway.")
+    print("[PINGALL] Failed after all attempts. Exiting automated traffic test.")
+    return False
 
 
 def run_automated_tests(net, policy_name):
@@ -141,54 +119,61 @@ def run_automated_tests(net, policy_name):
     demands = load_demands()
     output_file = f"data/{policy_name.lower()}_traffic_metrics.csv"
 
-    clean_old_logs(net)
-
     print()
     print("====================================")
     print(f"Running TrafPy-style traffic: {policy_name}")
     print("====================================")
 
-    net.pingAll()
+    cleanup_logs(net)
 
-    # Start all iperf servers first.
+    if not run_pingall_with_retries(net):
+        return False
+
     for demand in demands:
         flow_id = demand["flow_id"]
-        dst = demand["dst"]
+        dst = net.get(demand["dst"])
         port = 5001 + flow_id
-        start_iperf_server(net, dst, flow_id, port)
+
+        dst.cmd(
+            f"iperf -s -p {port} "
+            f"> /tmp/iperf_server_{flow_id}.log 2>&1 &"
+        )
 
     time.sleep(1)
 
-    experiment_start = time.time()
-
-    # Launch clients and ping probes according to start_time.
     for demand in demands:
-        now = time.time() - experiment_start
-        wait_time = demand["start_time"] - now
-
-        if wait_time > 0:
-            time.sleep(wait_time)
-
         flow_id = demand["flow_id"]
-        src = demand["src"]
-        dst = demand["dst"]
-        size_kb = demand["size_kb"]
+        src = net.get(demand["src"])
+        dst_ip = host_ip(demand["dst"])
         port = 5001 + flow_id
+        start_time = demand["start_time"]
+        size_bytes = int(demand["size_kb"] * 1024)
 
         print(
-            f"[FLOW {flow_id}] {src} -> {dst}, "
-            f"size={size_kb} KB, start={demand['start_time']}s"
+            f"[FLOW {flow_id}] {demand['src']} -> {demand['dst']} "
+            f"start={start_time}s size={demand['size_kb']}KB port={port}"
         )
 
-        start_ping_probe(net, src, dst, flow_id)
-        start_iperf_client(net, src, dst, flow_id, port, size_kb)
+        src.cmd(
+            f"sh -c 'sleep {start_time}; "
+            f"iperf -c {dst_ip} -p {port} -n {size_bytes} "
+            f"> /tmp/iperf_client_{flow_id}.log 2>&1' &"
+        )
 
-    print("[INFO] Waiting for background traffic to finish...")
-    wait_for_traffic_to_finish(net, timeout=60)
+        src.cmd(
+            f"sh -c 'sleep {start_time}; "
+            f"ping -c 5 {dst_ip} "
+            f"> /tmp/ping_{flow_id}.log 2>&1' &"
+        )
 
-    # Stop any remaining servers.
+    max_start = max(d["start_time"] for d in demands)
+    wait_time = max_start + 45
+
+    print("[INFO] Waiting for traffic to finish...")
+    time.sleep(wait_time)
+
     for host in net.hosts:
-        host.cmd("pkill -f 'iperf -s' 2>/dev/null")
+        host.cmd("pkill -f 'iperf -s'")
 
     with open(output_file, "w", newline="") as f:
         writer = csv.writer(f)
@@ -206,20 +191,10 @@ def run_automated_tests(net, policy_name):
 
         for demand in demands:
             flow_id = demand["flow_id"]
-            src = demand["src"]
-            dst = demand["dst"]
+            src = net.get(demand["src"])
 
-            iperf_output = read_host_file(
-                net,
-                src,
-                f"/tmp/iperf_client_{flow_id}.log",
-            )
-
-            ping_output = read_host_file(
-                net,
-                src,
-                f"/tmp/ping_{flow_id}.log",
-            )
+            iperf_output = src.cmd(f"cat /tmp/iperf_client_{flow_id}.log 2>/dev/null")
+            ping_output = src.cmd(f"cat /tmp/ping_{flow_id}.log 2>/dev/null")
 
             throughput = parse_iperf_output(iperf_output)
             latency, packet_loss = parse_ping_output(ping_output)
@@ -227,8 +202,8 @@ def run_automated_tests(net, policy_name):
             writer.writerow([
                 policy_name,
                 flow_id,
-                src,
-                dst,
+                demand["src"],
+                demand["dst"],
                 demand["size_kb"],
                 throughput,
                 latency,
@@ -239,3 +214,5 @@ def run_automated_tests(net, policy_name):
     print(f"Saved traffic metrics to {output_file}")
     print("====================================")
     print()
+
+    return True

@@ -19,42 +19,9 @@ def ensure_dirs():
     os.makedirs(PLOTS_DIR, exist_ok=True)
 
 
-def summarize_path_usage(path):
-    if not os.path.exists(path):
-        return None
-
-    paths = []
-
-    with open(path, "r") as f:
-        reader = csv.DictReader(f)
-
-        for row in reader:
-            if "path" in row:
-                paths.append(row["path"])
-
-    counts = Counter(paths)
-    total = sum(counts.values())
-
-    if total == 0:
-        return {
-            "total_flows": 0,
-            "upper": 0,
-            "lower": 0,
-            "upper_percent": 0,
-            "lower_percent": 0,
-        }
-
-    return {
-        "total_flows": total,
-        "upper": counts["upper"],
-        "lower": counts["lower"],
-        "upper_percent": round((counts["upper"] / total) * 100, 2),
-        "lower_percent": round((counts["lower"] / total) * 100, 2),
-    }
-
-
 def read_traffic_metrics(path):
     if not os.path.exists(path):
+        print(f"[WARN] Missing file: {path}")
         return []
 
     rows = []
@@ -77,6 +44,39 @@ def read_traffic_metrics(path):
     return rows
 
 
+def read_path_decisions(path):
+    if not os.path.exists(path):
+        return []
+
+    decisions = []
+
+    with open(path, "r") as f:
+        reader = csv.DictReader(f)
+
+        for row in reader:
+            if row.get("proto") == "tcp":
+                decisions.append(row)
+
+    return decisions
+
+
+def summarize_path_decisions(rows):
+    paths = [row["path"] for row in rows]
+    counts = Counter(paths)
+    total = sum(counts.values())
+
+    if total == 0:
+        return None
+
+    return {
+        "total": total,
+        "upper": counts["upper"],
+        "lower": counts["lower"],
+        "upper_percent": round((counts["upper"] / total) * 100, 2),
+        "lower_percent": round((counts["lower"] / total) * 100, 2),
+    }
+
+
 def average_metric(rows, metric):
     if not rows:
         return 0.0
@@ -92,26 +92,49 @@ def summarize_traffic(rows):
     }
 
 
-def print_path_summary(name, summary):
-    if summary is None:
-        print(f"\n{name} path decision file missing.")
-        return
-
-    print()
-    print(f"{name} Controller Path Decisions")
-    print("-" * 35)
-    print(f"Total decisions: {summary['total_flows']}")
-    print(f"Upper path:      {summary['upper']} ({summary['upper_percent']}%)")
-    print(f"Lower path:      {summary['lower']} ({summary['lower_percent']}%)")
-
-
 def print_traffic_summary(name, summary):
     print()
     print(f"{name} Traffic Metrics")
-    print("-" * 35)
+    print("-" * 40)
     print(f"Average throughput:  {summary['average_throughput_mbps']:.3f} Mbps")
     print(f"Average latency:     {summary['average_latency_ms']:.3f} ms")
     print(f"Average packet loss: {summary['average_packet_loss_percent']:.3f}%")
+
+
+def print_path_summary(name, summary):
+    if summary is None:
+        return
+
+    print()
+    print(f"{name} TCP Path Decisions")
+    print("-" * 40)
+    print(f"TCP decisions: {summary['total']}")
+    print(f"Upper path:    {summary['upper']} ({summary['upper_percent']}%)")
+    print(f"Lower path:    {summary['lower']} ({summary['lower_percent']}%)")
+
+
+def plot_metric_line_graph(fifo_rows, rl_rows, metric, ylabel, title, filename):
+    fifo_values = [row[metric] for row in fifo_rows]
+    rl_values = [row[metric] for row in rl_rows]
+
+    fifo_x = list(range(1, len(fifo_values) + 1))
+    rl_x = list(range(1, len(rl_values) + 1))
+
+    plt.figure()
+
+    if fifo_values:
+        plt.plot(fifo_x, fifo_values, marker="o", label="FIFO")
+
+    if rl_values:
+        plt.plot(rl_x, rl_values, marker="o", label="RL")
+
+    plt.xlabel("Traffic Flow Test")
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.legend()
+
+    plt.savefig(os.path.join(PLOTS_DIR, filename), bbox_inches="tight")
+    plt.close()
 
 
 def plot_path_usage(fifo_summary, rl_summary):
@@ -125,101 +148,37 @@ def plot_path_usage(fifo_summary, rl_summary):
     x = range(len(labels))
 
     plt.figure()
-
-    plt.bar(
-        [i - 0.2 for i in x],
-        fifo_values,
-        width=0.4,
-        label="FIFO",
-    )
-
-    plt.bar(
-        [i + 0.2 for i in x],
-        rl_values,
-        width=0.4,
-        label="RL",
-    )
-
+    plt.bar([i - 0.2 for i in x], fifo_values, width=0.4, label="FIFO")
+    plt.bar([i + 0.2 for i in x], rl_values, width=0.4, label="RL")
     plt.xticks(list(x), labels)
-    plt.ylabel("Number of Controller Decisions")
-    plt.title("FIFO vs RL Controller Path Decisions")
+    plt.ylabel("TCP Flow Decisions")
+    plt.title("FIFO vs RL TCP Path Decisions")
     plt.legend()
 
-    plt.savefig(
-        os.path.join(PLOTS_DIR, "fifo_vs_rl_path_usage.png"),
-        bbox_inches="tight",
-    )
-
-    plt.close()
-
-
-def plot_metric_line_graph(
-    fifo_rows,
-    rl_rows,
-    metric,
-    ylabel,
-    title,
-    filename,
-):
-    fifo_values = [row[metric] for row in fifo_rows]
-    rl_values = [row[metric] for row in rl_rows]
-
-    max_len = max(len(fifo_values), len(rl_values), 1)
-
-    fifo_x = list(range(1, len(fifo_values) + 1))
-    rl_x = list(range(1, len(rl_values) + 1))
-
-    plt.figure()
-
-    if fifo_values:
-        plt.plot(
-            fifo_x,
-            fifo_values,
-            marker="o",
-            label="FIFO",
-        )
-
-    if rl_values:
-        plt.plot(
-            rl_x,
-            rl_values,
-            marker="o",
-            label="RL",
-        )
-
-    plt.xlabel("Traffic Flow Test")
-    plt.ylabel(ylabel)
-    plt.title(title)
-    plt.xticks(range(1, max_len + 1))
-    plt.legend()
-
-    plt.savefig(
-        os.path.join(PLOTS_DIR, filename),
-        bbox_inches="tight",
-    )
-
+    plt.savefig(os.path.join(PLOTS_DIR, "fifo_vs_rl_path_usage.png"), bbox_inches="tight")
     plt.close()
 
 
 def main():
     ensure_dirs()
 
-    fifo_path_summary = summarize_path_usage(FIFO_DECISIONS)
-    rl_path_summary = summarize_path_usage(RL_DECISIONS)
-
     fifo_rows = read_traffic_metrics(FIFO_TRAFFIC)
     rl_rows = read_traffic_metrics(RL_TRAFFIC)
 
-    fifo_traffic_summary = summarize_traffic(fifo_rows)
-    rl_traffic_summary = summarize_traffic(rl_rows)
+    fifo_summary = summarize_traffic(fifo_rows)
+    rl_summary = summarize_traffic(rl_rows)
+
+    fifo_decisions = read_path_decisions(FIFO_DECISIONS)
+    rl_decisions = read_path_decisions(RL_DECISIONS)
+
+    fifo_path_summary = summarize_path_decisions(fifo_decisions)
+    rl_path_summary = summarize_path_decisions(rl_decisions)
+
+    print_traffic_summary("FIFO", fifo_summary)
+    print_traffic_summary("RL", rl_summary)
 
     print_path_summary("FIFO", fifo_path_summary)
     print_path_summary("RL", rl_path_summary)
-
-    print_traffic_summary("FIFO", fifo_traffic_summary)
-    print_traffic_summary("RL", rl_traffic_summary)
-
-    plot_path_usage(fifo_path_summary, rl_path_summary)
 
     plot_metric_line_graph(
         fifo_rows,
@@ -248,16 +207,14 @@ def main():
         filename="fifo_vs_rl_packet_loss.png",
     )
 
+    plot_path_usage(fifo_path_summary, rl_path_summary)
+
     print()
     print("Saved plots:")
-    print("- data/plots/fifo_vs_rl_path_usage.png")
     print("- data/plots/fifo_vs_rl_throughput.png")
     print("- data/plots/fifo_vs_rl_latency.png")
     print("- data/plots/fifo_vs_rl_packet_loss.png")
-    print()
-    print("Note:")
-    print("The path usage plot currently shows controller path decisions, not per-TrafPy-flow path decisions.")
-    print("For true per-flow path usage, the controller must install rules per TCP flow/port.")
+    print("- data/plots/fifo_vs_rl_path_usage.png")
 
 
 if __name__ == "__main__":

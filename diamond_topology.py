@@ -1,5 +1,4 @@
 import argparse
-import sys
 import time
 
 from mininet.net import Mininet
@@ -10,6 +9,7 @@ from mininet.cli import CLI
 from mininet.log import setLogLevel
 
 from automated_traffic_tests import run_automated_tests
+from config import LINK_BW_MBPS, LINK_DELAY
 
 
 class DiamondTopo(Topo):
@@ -35,51 +35,44 @@ class DiamondTopo(Topo):
             )
             self.addLink(h, s4, port2=i - 4)
 
-        # Diamond multipath links.
-        self.addLink(s1, s2, port1=5, port2=1, bw=5, delay="5ms")
-        self.addLink(s1, s3, port1=6, port2=1, bw=5, delay="5ms")
-        self.addLink(s2, s4, port1=2, port2=5, bw=5, delay="5ms")
-        self.addLink(s3, s4, port1=2, port2=6, bw=5, delay="5ms")
+        # Symmetric diamond multipath links.
+        # Upper path: s1 -> s2 -> s4
+        # Lower path: s1 -> s3 -> s4
+        self.addLink(
+            s1,
+            s2,
+            port1=5,
+            port2=1,
+            bw=LINK_BW_MBPS,
+            delay=LINK_DELAY,
+        )
 
+        self.addLink(
+            s1,
+            s3,
+            port1=6,
+            port2=1,
+            bw=LINK_BW_MBPS,
+            delay=LINK_DELAY,
+        )
 
-def verify_connectivity(net, max_attempts=3):
-    """
-    Run pingall up to max_attempts times.
+        self.addLink(
+            s2,
+            s4,
+            port1=2,
+            port2=5,
+            bw=LINK_BW_MBPS,
+            delay=LINK_DELAY,
+        )
 
-    If all hosts connect, continue.
-    If pingall fails after max_attempts, stop the network and exit.
-    """
-
-    print()
-    print("====================================")
-    print(" Verifying host connectivity")
-    print("====================================")
-
-    for attempt in range(1, max_attempts + 1):
-        print(f"*** pingall attempt {attempt}/{max_attempts}")
-
-        packet_loss_percent = net.pingAll()
-
-        if packet_loss_percent == 0:
-            print("*** Connectivity verified: 0% packet loss")
-            print("====================================")
-            print()
-            return True
-
-        print(f"*** Connectivity failed: {packet_loss_percent}% packet loss")
-
-        if attempt < max_attempts:
-            print("*** Waiting before retry...")
-            time.sleep(2)
-
-    print()
-    print("[ERROR] Host connectivity failed after 3 pingall attempts.")
-    print("[ERROR] Stopping Mininet and exiting.")
-    print("====================================")
-    print()
-
-    net.stop()
-    sys.exit(1)
+        self.addLink(
+            s3,
+            s4,
+            port1=2,
+            port2=6,
+            bw=LINK_BW_MBPS,
+            delay=LINK_DELAY,
+        )
 
 
 def run(policy_name=None):
@@ -104,16 +97,28 @@ def run(policy_name=None):
 
     print("*** Network started")
 
-    # Give Ryu time to connect switches and install rules.
     time.sleep(3)
-
-    # Verify all hosts can reach each other before running traffic tests.
-    verify_connectivity(net, max_attempts=3)
 
     if policy_name:
         run_automated_tests(net, policy_name)
 
-    print("*** Dropping into Mininet CLI")
+        print()
+        print("====================================")
+        print(f"{policy_name} experiment complete.")
+        print("====================================")
+        print()
+        print("Mininet will now stop automatically.")
+        print()
+        print("To rerun this experiment, use:")
+        print(f"sudo python3 diamond_topology.py --policy {policy_name}")
+        print()
+
+        net.stop()
+        return
+
+    print("*** No policy provided.")
+    print("*** Dropping into Mininet CLI.")
+    print("*** Try: pingall")
     CLI(net)
 
     print("*** Stopping network")

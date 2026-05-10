@@ -9,7 +9,7 @@ TOP_HOSTS = ["h1", "h2", "h3", "h4"]
 BOTTOM_HOSTS = ["h5", "h6", "h7", "h8"]
 
 
-def generate_demands(num_flows=80, seed=42):
+def generate_demands(num_flows=100, seed=42):
     random.seed(seed)
 
     demands = []
@@ -23,11 +23,11 @@ def generate_demands(num_flows=80, seed=42):
             src = random.choice(BOTTOM_HOSTS)
             dst = random.choice(TOP_HOSTS)
 
-        # Bursty arrivals. Many flows start close together.
-        current_time += random.choice([0.0, 0.0, 0.02, 0.05, 0.1])
+        # Bursty traffic: many flows start close together.
+        current_time += random.choice([0.0, 0.0, 0.01, 0.02, 0.05, 0.1])
 
-        # Flow size is now in KB, not MB.
-        size_kb = round(random.uniform(100.0, 1000.0), 1)
+        # Small flows so runtime stays reasonable.
+        size_kb = round(random.uniform(250.0, 750.0), 1)
 
         demands.append({
             "flow_id": flow_id,
@@ -55,7 +55,7 @@ def save_demands(demands):
 
 
 if __name__ == "__main__":
-    demands = generate_demands(num_flows=80)
+    demands = generate_demands(num_flows=100)
     save_demands(demands)
 
     print()

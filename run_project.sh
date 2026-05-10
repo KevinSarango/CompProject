@@ -1,7 +1,6 @@
 #!/bin/bash
 
 PROJECT_DIR="$HOME/CompProject"
-RYU_ENV="$HOME/ryu38"
 
 echo "========================================="
 echo " Multipath SDN RL Project Instructions"
@@ -14,7 +13,6 @@ echo "python3 generate_trafpy_demands.py"
 echo
 
 echo "Step 2: Train RL agent on the same traffic demands"
-echo "cd $PROJECT_DIR"
 echo "python3 train_rl_agent.py"
 echo "python3 plot_training_results.py"
 echo
@@ -24,7 +22,7 @@ echo
 echo "Terminal 1:"
 echo "cd $PROJECT_DIR"
 echo "sudo mn -c"
-echo "source $RYU_ENV/bin/activate"
+echo "source ~/ryu38/bin/activate"
 echo "ryu-manager --verbose ryu_fifo_controller.py"
 echo
 echo "Terminal 2:"
@@ -41,7 +39,7 @@ echo
 echo "Terminal 1:"
 echo "cd $PROJECT_DIR"
 echo "sudo mn -c"
-echo "source $RYU_ENV/bin/activate"
+echo "source ~/ryu38/bin/activate"
 echo "ryu-manager --verbose ryu_rl_controller.py"
 echo
 echo "Terminal 2:"
@@ -54,7 +52,6 @@ echo "Then stop Ryu with CTRL+C"
 echo
 
 echo "Step 5: Evaluate FIFO vs RL"
-echo "cd $PROJECT_DIR"
 echo "python3 eval_fifo_vs_rl.py"
 echo
 
@@ -63,6 +60,8 @@ echo "- data/trafpy_demands.csv"
 echo "- data/q_table.json"
 echo "- data/training_rewards.csv"
 echo "- data/training_steps.csv"
+echo "- data/fifo_metrics.csv"
+echo "- data/rl_metrics.csv"
 echo "- data/fifo_traffic_metrics.csv"
 echo "- data/rl_traffic_metrics.csv"
 echo "- data/plots/"
