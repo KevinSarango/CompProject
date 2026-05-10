@@ -1,134 +1,80 @@
 import csv
 import os
-
-from config import LOAD_BALANCE_LIMIT_KB, LOAD_DECAY_FACTOR
-
+from itertools import product
+from config import *
 
 class SimpleSDNEnv:
     """
-    Demand-driven SDN environment.
-
-    The RL agent trains on the same TrafPy-style demand trace that is later
-    replayed in Mininet.
-
-    Actions:
-        0 = upper path: s1 -> s2 -> s4
-        1 = lower path: s1 -> s3 -> s4
-
-    States:
-        0 = balanced
-        1 = upper path busy
-        2 = lower path busy
-        3 = both paths busy
-
-    Reward:
-        Uses normalized packet loss, delay, throughput, and action impact.
-
-    Reward weights:
-        packet loss   = 2.0
-        delay         = 1.5
-        throughput    = 1.0
-        action impact = 1.0
+    54-state demand-driven Q-learning environment.
+    State key: util_bin_delay_bin_demand_bin_previous_action
+    util/delay bins: 0=upper better, 1=similar, 2=lower better
+    demand bins: 0=small, 1=medium, 2=large
+    previous_action: 0=upper, 1=lower
     """
-
     def __init__(self, demand_file="data/trafpy_demands.csv"):
         self.demand_file = demand_file
         self.demands = self.load_demands()
+        self.limit = LOAD_BALANCE_LIMIT_KB
+        self.decay = LOAD_DECAY_FACTOR
+        self.reset()
 
-        self.current_index = 0
-
-        self.upper_load = 0.0
-        self.lower_load = 0.0
-
-        # One shared load-balancing limit for both paths.
-        self.load_balance_limit_kb = LOAD_BALANCE_LIMIT_KB
-
-        # Shared decay factor.
-        self.decay_factor = LOAD_DECAY_FACTOR
-
-        # Reward weights.
-        self.gamma_packet_loss = 2.0
-        self.gamma_delay = 1.5
-        self.gamma_throughput = 1.0
-        self.gamma_action_impact = 1.0
+    @staticmethod
+    def all_state_keys():
+        return [f"{u}_{d}_{s}_{p}" for u, d, s, p in product(range(3), range(3), range(3), range(2))]
 
     def load_demands(self):
         if not os.path.exists(self.demand_file):
-            raise FileNotFoundError(
-                f"{self.demand_file} not found. "
-                f"Run python3 generate_trafpy_demands.py first."
-            )
-
-        demands = []
-
-        with open(self.demand_file, "r") as f:
-            reader = csv.DictReader(f)
-
-            for row in reader:
-                demands.append({
+            raise FileNotFoundError(f"{self.demand_file} not found. Run generate_trafpy_demands.py first.")
+        out = []
+        with open(self.demand_file) as f:
+            for row in csv.DictReader(f):
+                out.append({
                     "flow_id": int(row["flow_id"]),
                     "src": row["src"],
                     "dst": row["dst"],
                     "start_time": float(row["start_time"]),
                     "size_kb": float(row["size_kb"]),
                 })
-
-        return demands
+        return out
 
     def reset(self):
         self.current_index = 0
         self.upper_load = 0.0
         self.lower_load = 0.0
+        self.previous_action = 0
         return self.get_state()
 
-    def normalize(self, value, max_value):
+    @staticmethod
+    def normalize(value, max_value):
         if max_value == 0:
             return 0.0
+        return max(0.0, min(float(value), float(max_value))) / max_value
 
-        value = max(0.0, min(float(value), float(max_value)))
-        return value / max_value
-
-    def get_state(self):
-        upper_util = self.upper_load / self.load_balance_limit_kb
-        lower_util = self.lower_load / self.load_balance_limit_kb
-
-        busy_threshold = 0.70
-        balanced_threshold = 0.15
-
-        upper_busy = upper_util >= busy_threshold
-        lower_busy = lower_util >= busy_threshold
-
-        if upper_busy and lower_busy:
-            return 3
-
-        if upper_busy:
-            return 1
-
-        if lower_busy:
-            return 2
-
-        if abs(upper_util - lower_util) <= balanced_threshold:
+    @staticmethod
+    def difference_bin(upper_value, lower_value, threshold):
+        diff = upper_value - lower_value
+        if diff < -threshold:
             return 0
+        if diff > threshold:
+            return 2
+        return 1
 
-        if upper_util > lower_util:
+    @staticmethod
+    def demand_bin(size_kb):
+        if size_kb <= SMALL_FLOW_KB:
+            return 0
+        if size_kb <= LARGE_FLOW_KB:
             return 1
-
         return 2
 
-    def calculate_action_impact(self, selected_util, other_util):
-        """
-        Positive if the selected path is less utilized than the alternative.
-        Negative if the selected path is worse.
-        """
-        impact = other_util - selected_util
-
-        if impact > 1.0:
-            return 1.0
-
-        if impact < -1.0:
-            return -1.0
-
-        return impact
+    def get_state(self):
+        size_kb = 0.0 if self.current_index >= len(self.demands) else self.demands[self.current_index]["size_kb"]
+        upper_util = self.upper_load / self.limit
+        lower_util = self.lower_load / self.limit
+        util_bin = self.difference_bin(upper_util, lower_util, UTIL_DIFF_THRESHOLD)
+        delay_bin = self.difference_bin(upper_util, lower_util, DELAY_DIFF_THRESHOLD)
+        demand_bin = self.demand_bin(size_kb)
+        return f"{util_bin}_{delay_bin}_{demand_bin}_{self.previous_action}"
 
     def step(self, action):
         if self.current_index >= len(self.demands):
@@ -136,75 +82,61 @@ class SimpleSDNEnv:
 
         demand = self.demands[self.current_index]
         flow_size = demand["size_kb"]
+        old_previous_action = self.previous_action
 
-        self.upper_load *= self.decay_factor
-        self.lower_load *= self.decay_factor
+        self.upper_load *= self.decay
+        self.lower_load *= self.decay
 
         if action == 0:
             selected_path = "upper"
             self.upper_load += flow_size
-
             selected_load = self.upper_load
             other_load = self.lower_load
         else:
             selected_path = "lower"
             self.lower_load += flow_size
-
             selected_load = self.lower_load
             other_load = self.upper_load
 
-        selected_util = selected_load / self.load_balance_limit_kb
-        other_util = other_load / self.load_balance_limit_kb
-
+        selected_util = selected_load / self.limit
+        other_util = other_load / self.limit
         raw_delay = selected_util * 100.0
         raw_packet_loss = max(0.0, selected_util - 1.0) * 100.0
-        raw_throughput = max(0.0, self.load_balance_limit_kb - selected_load)
-
+        raw_throughput = max(0.0, self.limit - selected_load)
         normalized_delay = self.normalize(raw_delay, 100.0)
         normalized_packet_loss = self.normalize(raw_packet_loss, 100.0)
-        normalized_throughput = self.normalize(
-            raw_throughput,
-            self.load_balance_limit_kb,
-        )
-
-        action_impact = self.calculate_action_impact(
-            selected_util=selected_util,
-            other_util=other_util,
-        )
-
-        base_reward = 1.0
+        normalized_throughput = self.normalize(raw_throughput, self.limit)
+        upper_util_after = self.upper_load / self.limit
+        lower_util_after = self.lower_load / self.limit
+        path_imbalance = abs(upper_util_after - lower_util_after)
+        action_change = 1.0 if action != old_previous_action else 0.0
+        action_impact = other_util - selected_util
 
         reward = (
-            base_reward
-            - self.gamma_packet_loss * normalized_packet_loss
-            - self.gamma_delay * normalized_delay
-            + self.gamma_throughput * normalized_throughput
-            + self.gamma_action_impact * action_impact
+            BASE_REWARD
+            + W_THROUGHPUT * normalized_throughput
+            - W_DELAY * normalized_delay
+            - W_PACKET_LOSS * normalized_packet_loss
+            - W_IMBALANCE * path_imbalance
+            - W_ACTION_CHANGE * action_change
+            + action_impact
         )
+        reward = max(-2.0, min(2.0, reward))
 
+        self.previous_action = action
         self.current_index += 1
-
         next_state = self.get_state()
         done = self.current_index >= len(self.demands)
 
         info = {
-            "flow_id": demand["flow_id"],
-            "src": demand["src"],
-            "dst": demand["dst"],
-            "start_time": demand["start_time"],
-            "size_kb": flow_size,
-            "selected_path": selected_path,
-            "upper_load": self.upper_load,
-            "lower_load": self.lower_load,
-            "selected_load": selected_load,
-            "raw_delay": raw_delay,
-            "raw_packet_loss": raw_packet_loss,
-            "raw_throughput": raw_throughput,
-            "normalized_delay": normalized_delay,
-            "normalized_packet_loss": normalized_packet_loss,
-            "normalized_throughput": normalized_throughput,
-            "action_impact": action_impact,
-            "reward": reward,
+            "flow_id": demand["flow_id"], "src": demand["src"], "dst": demand["dst"],
+            "start_time": demand["start_time"], "size_kb": flow_size,
+            "selected_path": selected_path, "previous_action": old_previous_action,
+            "upper_load": self.upper_load, "lower_load": self.lower_load,
+            "selected_load": selected_load, "raw_delay": raw_delay,
+            "raw_packet_loss": raw_packet_loss, "raw_throughput": raw_throughput,
+            "normalized_delay": normalized_delay, "normalized_packet_loss": normalized_packet_loss,
+            "normalized_throughput": normalized_throughput, "path_imbalance": path_imbalance,
+            "action_change": action_change, "action_impact": action_impact, "reward": reward,
         }
-
         return next_state, reward, done, info

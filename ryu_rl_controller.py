@@ -1,11 +1,8 @@
-from config import (
-    LOAD_BALANCE_LIMIT_KB,
-    LOAD_DECAY_FACTOR,
-    DEFAULT_FLOW_SIZE_KB,
-)
+import csv
+import os
+from config import LOAD_BALANCE_LIMIT_KB, LOAD_DECAY_FACTOR, DEFAULT_FLOW_SIZE_KB
 from ryu_common import BaseMultipathController
-from rl_policy import choose_path, set_network_state
-
+from rl_policy import choose_path, build_state_key, set_network_state
 
 class SimpleSwitch13(BaseMultipathController):
     POLICY_NAME = "RL"
@@ -13,104 +10,53 @@ class SimpleSwitch13(BaseMultipathController):
 
     def __init__(self, *args, **kwargs):
         super(SimpleSwitch13, self).__init__(*args, **kwargs)
-
         self.upper_load = 0.0
         self.lower_load = 0.0
-
-        self.load_balance_limit_kb = LOAD_BALANCE_LIMIT_KB
-        self.decay_factor = LOAD_DECAY_FACTOR
+        self.previous_action = 0
+        self.limit = LOAD_BALANCE_LIMIT_KB
+        self.decay = LOAD_DECAY_FACTOR
         self.default_flow_size_kb = DEFAULT_FLOW_SIZE_KB
+        self.flow_sizes = self.load_flow_sizes()
 
-        # If one path is clearly more loaded, prefer the less-loaded path.
-        # This keeps the deployed RL policy from overloading one side.
-        self.override_threshold = 0.15
+    def load_flow_sizes(self):
+        demand_file = "data/trafpy_demands.csv"
+        if not os.path.exists(demand_file):
+            return {}
+        sizes = {}
+        with open(demand_file) as f:
+            for row in csv.DictReader(f):
+                sizes[int(row["flow_id"])] = float(row["size_kb"])
+        return sizes
 
-    def estimate_state(self):
-        upper_util = self.upper_load / self.load_balance_limit_kb
-        lower_util = self.lower_load / self.load_balance_limit_kb
+    def get_flow_size_from_ports(self, flow_info):
+        if not flow_info:
+            return self.default_flow_size_kb
+        dst_port = int(flow_info.get("dst_port", 0))
+        src_port = int(flow_info.get("src_port", 0))
+        if dst_port >= 5001:
+            return self.flow_sizes.get(dst_port - 5001, self.default_flow_size_kb)
+        if src_port >= 5001:
+            return self.flow_sizes.get(src_port - 5001, self.default_flow_size_kb)
+        return self.default_flow_size_kb
 
-        busy_threshold = 0.70
-        balanced_threshold = 0.15
+    def choose_path(self, src, dst, flow_info=None):
+        flow_size_kb = self.get_flow_size_from_ports(flow_info)
+        self.upper_load *= self.decay
+        self.lower_load *= self.decay
+        state_key = build_state_key(self.upper_load, self.lower_load, flow_size_kb, self.previous_action)
+        set_network_state(state_key)
+        path = choose_path(src, dst, state_key=state_key)
 
-        upper_busy = upper_util >= busy_threshold
-        lower_busy = lower_util >= busy_threshold
-
-        if upper_busy and lower_busy:
-            return "3"
-
-        if upper_busy:
-            return "1"
-
-        if lower_busy:
-            return "2"
-
-        if abs(upper_util - lower_util) <= balanced_threshold:
-            return "0"
-
-        if upper_util > lower_util:
-            return "1"
-
-        return "2"
-
-    def less_loaded_path(self):
-        upper_util = self.upper_load / self.load_balance_limit_kb
-        lower_util = self.lower_load / self.load_balance_limit_kb
-
-        if upper_util <= lower_util:
-            return "upper"
-
-        return "lower"
-
-    def choose_path(self, src, dst, tcp_dst=None, flow_size_kb=None):
-        if flow_size_kb is None:
-            flow_size_kb = self.default_flow_size_kb
-
-        # Decay current estimated loads to simulate older flows completing.
-        self.upper_load *= self.decay_factor
-        self.lower_load *= self.decay_factor
-
-        state = self.estimate_state()
-        set_network_state(state)
-
-        qtable_path = choose_path(src, dst)
-        load_path = self.less_loaded_path()
-
-        upper_util = self.upper_load / self.load_balance_limit_kb
-        lower_util = self.lower_load / self.load_balance_limit_kb
-        util_gap = abs(upper_util - lower_util)
-
-        # RL first, but if the estimated load is clearly imbalanced,
-        # use the less-loaded path to avoid making the network worse.
-        if util_gap >= self.override_threshold:
-            final_path = load_path
-            reason = "load_override"
-        else:
-            final_path = qtable_path
-            reason = "q_table"
-
-        if final_path == "upper":
+        if path == "upper":
             self.upper_load += flow_size_kb
+            self.previous_action = 0
         else:
             self.lower_load += flow_size_kb
+            self.previous_action = 1
 
         self.logger.info(
-            "[RL] decision=%s src=%s dst=%s tcp_dst=%s size=%.1fKB "
-            "state=%s qtable=%s final=%s reason=%s "
-            "upper_load=%.1f lower_load=%.1f limit=%.1f",
-            self.flow_counter,
-            src,
-            dst,
-            tcp_dst,
-            flow_size_kb,
-            state,
-            qtable_path,
-            final_path,
-            reason,
-            self.upper_load,
-            self.lower_load,
-            self.load_balance_limit_kb,
+            "[RL] decision=%s src=%s dst=%s state=%s path=%s size=%.1fKB upper_load=%.2f lower_load=%.2f",
+            self.flow_counter, src, dst, state_key, path, flow_size_kb, self.upper_load, self.lower_load
         )
-
         self.flow_counter += 1
-
-        return final_path
+        return path

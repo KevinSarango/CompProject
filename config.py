@@ -1,28 +1,18 @@
-"""
-config.py
-
-Central project configuration.
-
-This file is the single source of truth for:
-- load-balancing limit used by the RL training environment
-- load-balancing limit used by the deployed Ryu RL controller
-- diamond topology link parameters
-- pingall retry behavior
-"""
-
-# One shared load-balancing limit used across training and controller logic.
-LOAD_BALANCE_LIMIT_KB = 2500.0
-
-# Shared load decay used by the training environment and RL controller.
-LOAD_DECAY_FACTOR = 0.85
-
-# Approximate flow size used by the deployed Ryu RL controller's load estimator.
-DEFAULT_FLOW_SIZE_KB = 500.0
-
-# Symmetric diamond topology link settings.
+"""Shared constants for SDN RL project."""
+LOAD_BALANCE_LIMIT_KB = 3500.0
 LINK_BW_MBPS = 10
 LINK_DELAY = "5ms"
-
-# Connectivity fallback settings.
+LOAD_DECAY_FACTOR = 0.85
+DEFAULT_FLOW_SIZE_KB = 500.0
 PINGALL_ATTEMPTS = 3
 PINGALL_RETRY_WAIT_SECONDS = 2
+UTIL_DIFF_THRESHOLD = 0.15
+DELAY_DIFF_THRESHOLD = 0.10
+SMALL_FLOW_KB = 400.0
+LARGE_FLOW_KB = 650.0
+W_THROUGHPUT = 1.0
+W_DELAY = 1.5
+W_PACKET_LOSS = 2.0
+W_IMBALANCE = 0.5
+W_ACTION_CHANGE = 0.10
+BASE_REWARD = 1.0
