@@ -3,3 +3,6 @@ __pycache__/
 DS_Store
 Pipfile.lock
 
+# Generated experiment data
+data/*.csv
+data/*.log

@@ -2,8 +2,8 @@ import argparse
 import os
 import time
 
-# Force this topology process to use diamond output filenames.
-os.environ["TOPO_MODE"] = "diamond"
+# Force this topology process to use three-path output filenames.
+os.environ["TOPO_MODE"] = "three_path"
 
 from mininet.net import Mininet
 from mininet.node import RemoteController, OVSSwitch
@@ -13,15 +13,35 @@ from mininet.cli import CLI
 from mininet.log import setLogLevel
 
 from automated_traffic_tests import run_automated_tests
-from config import DIAMOND_LINK_BW_MBPS, DIAMOND_LINK_DELAY
+from config import THREE_PATH_LINKS
 
 
-class DiamondTopo(Topo):
+class ThreePathTopo(Topo):
+    """
+    Three-path multipath topology.
+
+              h1 h2 h3 h4
+                    |
+                   s1
+              /     |     \
+            s2      s3      s5
+              \     |     /
+                   s4
+                    |
+              h5 h6 h7 h8
+
+    Paths:
+        low_delay: s1 -> s2 -> s4
+        balanced:  s1 -> s3 -> s4
+        high_bw:   s1 -> s5 -> s4
+    """
+
     def build(self):
         s1 = self.addSwitch("s1", dpid="0000000000000001")
         s2 = self.addSwitch("s2", dpid="0000000000000002")
         s3 = self.addSwitch("s3", dpid="0000000000000003")
         s4 = self.addSwitch("s4", dpid="0000000000000004")
+        s5 = self.addSwitch("s5", dpid="0000000000000005")
 
         for i in range(1, 5):
             h = self.addHost(
@@ -39,45 +59,67 @@ class DiamondTopo(Topo):
             )
             self.addLink(h, s4, port2=i - 4)
 
-        # Upper path: s1 -> s2 -> s4
+        low = THREE_PATH_LINKS["low_delay"]
+        balanced = THREE_PATH_LINKS["balanced"]
+        high = THREE_PATH_LINKS["high_bw"]
+
+        # Path 0: low delay, low bandwidth
         self.addLink(
             s1,
             s2,
             port1=5,
             port2=1,
-            bw=DIAMOND_LINK_BW_MBPS,
-            delay=DIAMOND_LINK_DELAY,
+            bw=low["bw"],
+            delay=low["delay"],
         )
         self.addLink(
             s2,
             s4,
             port1=2,
             port2=5,
-            bw=DIAMOND_LINK_BW_MBPS,
-            delay=DIAMOND_LINK_DELAY,
+            bw=low["bw"],
+            delay=low["delay"],
         )
 
-        # Lower path: s1 -> s3 -> s4
+        # Path 1: balanced
         self.addLink(
             s1,
             s3,
             port1=6,
             port2=1,
-            bw=DIAMOND_LINK_BW_MBPS,
-            delay=DIAMOND_LINK_DELAY,
+            bw=balanced["bw"],
+            delay=balanced["delay"],
         )
         self.addLink(
             s3,
             s4,
             port1=2,
             port2=6,
-            bw=DIAMOND_LINK_BW_MBPS,
-            delay=DIAMOND_LINK_DELAY,
+            bw=balanced["bw"],
+            delay=balanced["delay"],
+        )
+
+        # Path 2: high bandwidth, high delay
+        self.addLink(
+            s1,
+            s5,
+            port1=7,
+            port2=1,
+            bw=high["bw"],
+            delay=high["delay"],
+        )
+        self.addLink(
+            s5,
+            s4,
+            port1=2,
+            port2=7,
+            bw=high["bw"],
+            delay=high["delay"],
         )
 
 
 def run(policy_name=None):
-    topo = DiamondTopo()
+    topo = ThreePathTopo()
 
     net = Mininet(
         topo=topo,
@@ -90,7 +132,7 @@ def run(policy_name=None):
 
     net.addController("c0", controller=RemoteController, ip="127.0.0.1", port=6653)
 
-    print("*** Starting diamond topology")
+    print("*** Starting three-path topology")
     net.start()
 
     for sw in net.switches:
@@ -103,7 +145,7 @@ def run(policy_name=None):
         run_automated_tests(net, policy_name)
         print()
         print("====================================")
-        print(f"{policy_name} diamond experiment complete.")
+        print(f"{policy_name} three-path experiment complete.")
         print("====================================")
         net.stop()
         return

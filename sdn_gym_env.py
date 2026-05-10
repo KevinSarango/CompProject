@@ -2,6 +2,7 @@ import csv
 import os
 
 from config import (
+    ACTION_TO_PATH,
     BASE_REWARD,
     DEFAULT_FLOW_SIZE_KB,
     GAMMA_ACTION_IMPACT,
@@ -10,44 +11,34 @@ from config import (
     GAMMA_PACKET_LOSS,
     GAMMA_SWITCHING,
     GAMMA_THROUGHPUT,
-    LOAD_BALANCE_LIMIT_KB,
     LOAD_DECAY_FACTOR,
-    MEDIUM_FLOW_KB,
+    NUM_PATHS,
+    PATH_CAPACITY_KB,
+    PATH_DELAY_FACTOR,
     SMALL_FLOW_KB,
+    MEDIUM_FLOW_KB,
     UTILIZATION_DIFF_THRESHOLD,
 )
 
 
 class SimpleSDNEnv:
     """
-    Demand-driven SDN environment for tabular Q-learning.
+    Demand-driven SDN environment.
 
-    The agent trains on the same TrafPy-style demand trace that is replayed
-    later in Mininet.
+    State:
+        least_utilized_path_bin_demand_bin_previous_action
 
-    Actions:
-        0 = upper path: s1 -> s2 -> s4
-        1 = lower path: s1 -> s3 -> s4
+    For diamond:
+        NUM_PATHS = 2
+        actions = upper, lower
 
-    18-state representation:
-        state = utilization_bin_demand_bin_previous_action
+    For three_path:
+        NUM_PATHS = 3
+        actions = low_delay, balanced, high_bw
 
-    utilization_bin:
-        0 = upper path is less utilized
-        1 = paths are similarly utilized
-        2 = lower path is less utilized
-
-    demand_bin:
-        0 = small incoming flow
-        1 = medium incoming flow
-        2 = large incoming flow
-
-    previous_action:
-        0 = previous flow used upper path
-        1 = previous flow used lower path
-
-    Total states:
-        3 * 3 * 2 = 18
+    The reward is now path-aware:
+        - each path has its own capacity
+        - each path has its own delay factor
     """
 
     def __init__(self, demand_file="data/trafpy_demands.csv"):
@@ -55,11 +46,9 @@ class SimpleSDNEnv:
         self.demands = self.load_demands()
 
         self.current_index = 0
-        self.upper_load = 0.0
-        self.lower_load = 0.0
+        self.path_loads = [0.0 for _ in range(NUM_PATHS)]
         self.previous_action = 0
 
-        self.load_balance_limit_kb = LOAD_BALANCE_LIMIT_KB
         self.decay_factor = LOAD_DECAY_FACTOR
 
     def load_demands(self):
@@ -86,8 +75,7 @@ class SimpleSDNEnv:
 
     def reset(self):
         self.current_index = 0
-        self.upper_load = 0.0
-        self.lower_load = 0.0
+        self.path_loads = [0.0 for _ in range(NUM_PATHS)]
         self.previous_action = 0
         return self.get_state(self.get_current_flow_size())
 
@@ -104,20 +92,6 @@ class SimpleSDNEnv:
         value = max(0.0, min(float(value), float(max_value)))
         return value / max_value
 
-    def get_utilization_bin(self):
-        upper_util = self.upper_load / self.load_balance_limit_kb
-        lower_util = self.lower_load / self.load_balance_limit_kb
-
-        diff = upper_util - lower_util
-
-        if diff < -UTILIZATION_DIFF_THRESHOLD:
-            return 0  # upper is less utilized
-
-        if diff > UTILIZATION_DIFF_THRESHOLD:
-            return 2  # lower is less utilized
-
-        return 1  # similar utilization
-
     def get_demand_bin(self, flow_size_kb):
         if flow_size_kb <= SMALL_FLOW_KB:
             return 0
@@ -127,17 +101,53 @@ class SimpleSDNEnv:
 
         return 2
 
-    def get_state(self, flow_size_kb):
-        utilization_bin = self.get_utilization_bin()
-        demand_bin = self.get_demand_bin(flow_size_kb)
-        return f"{utilization_bin}_{demand_bin}_{self.previous_action}"
+    def get_path_utilizations(self):
+        utilizations = []
 
-    def calculate_action_impact(self, selected_util, other_util):
+        for index, load in enumerate(self.path_loads):
+            capacity = PATH_CAPACITY_KB[index]
+            utilizations.append(load / capacity)
+
+        return utilizations
+
+    def get_least_utilized_path_bin(self):
+        utilizations = self.get_path_utilizations()
+
+        min_util = min(utilizations)
+        max_util = max(utilizations)
+
+        if max_util - min_util <= UTILIZATION_DIFF_THRESHOLD:
+            if NUM_PATHS == 3:
+                return 1
+            return 0
+
+        return utilizations.index(min_util)
+
+    def get_state(self, flow_size_kb):
+        least_utilized_bin = self.get_least_utilized_path_bin()
+        demand_bin = self.get_demand_bin(flow_size_kb)
+        return f"{least_utilized_bin}_{demand_bin}_{self.previous_action}"
+
+    def calculate_action_impact(self, action, selected_util):
         """
-        Positive if selected path is less utilized than the alternative.
-        Negative if selected path is more utilized than the alternative.
+        Positive if selected path is less utilized than the other available paths.
+        Negative if selected path is more utilized.
         """
-        impact = other_util - selected_util
+
+        utilizations = self.get_path_utilizations()
+
+        other_utils = [
+            util
+            for index, util in enumerate(utilizations)
+            if index != action
+        ]
+
+        if not other_utils:
+            return 0.0
+
+        avg_other_util = sum(other_utils) / len(other_utils)
+        impact = avg_other_util - selected_util
+
         return max(-1.0, min(1.0, impact))
 
     def step(self, action):
@@ -148,37 +158,44 @@ class SimpleSDNEnv:
         flow_size = demand["size_kb"]
 
         # Simulate old flows completing over time.
-        self.upper_load *= self.decay_factor
-        self.lower_load *= self.decay_factor
+        self.path_loads = [
+            load * self.decay_factor
+            for load in self.path_loads
+        ]
 
-        if action == 0:
-            selected_path = "upper"
-            self.upper_load += flow_size
-            selected_load = self.upper_load
-            other_load = self.lower_load
-        else:
-            selected_path = "lower"
-            self.lower_load += flow_size
-            selected_load = self.lower_load
-            other_load = self.upper_load
+        selected_path = ACTION_TO_PATH[str(action)]
 
-        selected_util = selected_load / self.load_balance_limit_kb
-        other_util = other_load / self.load_balance_limit_kb
+        self.path_loads[action] += flow_size
 
-        raw_delay = selected_util * 100.0
+        selected_load = self.path_loads[action]
+        selected_capacity = PATH_CAPACITY_KB[action]
+        selected_delay_factor = PATH_DELAY_FACTOR[action]
+
+        selected_util = selected_load / selected_capacity
+
+        # Path-aware delay model:
+        # high_bw has more capacity but a higher base delay factor.
+        raw_delay = selected_util * 100.0 * selected_delay_factor
+
+        # Path-aware packet loss:
+        # loss begins when selected load exceeds selected path capacity.
         raw_packet_loss = max(0.0, selected_util - 1.0) * 100.0
-        raw_throughput = max(0.0, self.load_balance_limit_kb - selected_load)
 
-        normalized_delay = self.normalize(raw_delay, 100.0)
+        # Path-aware throughput:
+        # larger-capacity paths provide more available throughput.
+        raw_throughput = max(0.0, selected_capacity - selected_load)
+
+        normalized_delay = self.normalize(raw_delay, 150.0)
         normalized_packet_loss = self.normalize(raw_packet_loss, 100.0)
-        normalized_throughput = self.normalize(raw_throughput, self.load_balance_limit_kb)
+        normalized_throughput = self.normalize(raw_throughput, selected_capacity)
 
         action_impact = self.calculate_action_impact(
+            action=action,
             selected_util=selected_util,
-            other_util=other_util,
         )
 
-        imbalance = abs(self.upper_load - self.lower_load) / self.load_balance_limit_kb
+        utilizations = self.get_path_utilizations()
+        imbalance = max(utilizations) - min(utilizations)
         imbalance = max(0.0, min(1.0, imbalance))
 
         switching_penalty = 1.0 if action != self.previous_action else 0.0
@@ -207,9 +224,11 @@ class SimpleSDNEnv:
             "start_time": demand["start_time"],
             "size_kb": flow_size,
             "selected_path": selected_path,
-            "upper_load": self.upper_load,
-            "lower_load": self.lower_load,
+            "path_loads": list(self.path_loads),
+            "path_utilizations": utilizations,
             "selected_load": selected_load,
+            "selected_capacity": selected_capacity,
+            "selected_delay_factor": selected_delay_factor,
             "raw_delay": raw_delay,
             "raw_packet_loss": raw_packet_loss,
             "raw_throughput": raw_throughput,

@@ -3,7 +3,12 @@ import os
 import re
 import time
 
-from config import PINGALL_ATTEMPTS, PINGALL_RETRY_WAIT_SECONDS
+from config import (
+    FIFO_TRAFFIC_FILE,
+    PINGALL_ATTEMPTS,
+    PINGALL_RETRY_WAIT_SECONDS,
+    RL_TRAFFIC_FILE,
+)
 
 
 DEMAND_FILE = "data/trafpy_demands.csv"
@@ -113,11 +118,18 @@ def run_pingall_with_retries(net):
     return False
 
 
+def get_output_file(policy_name):
+    if policy_name.upper() == "FIFO":
+        return FIFO_TRAFFIC_FILE
+
+    return RL_TRAFFIC_FILE
+
+
 def run_automated_tests(net, policy_name):
     os.makedirs("data", exist_ok=True)
 
     demands = load_demands()
-    output_file = f"data/{policy_name.lower()}_traffic_metrics.csv"
+    output_file = get_output_file(policy_name)
 
     print()
     print("====================================")

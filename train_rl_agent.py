@@ -3,24 +3,31 @@ import json
 import os
 import random
 
+from config import (
+    ACTION_TO_PATH,
+    NUM_PATHS,
+    PATHS,
+    Q_TABLE_FILE,
+    TRAINING_REWARDS_FILE,
+    TRAINING_STEPS_FILE,
+)
 from sdn_gym_env import SimpleSDNEnv
 
 
-ACTIONS = [0, 1]
-ACTION_NAMES = {
-    0: "upper",
-    1: "lower",
-}
+ACTIONS = list(range(NUM_PATHS))
 
 
 def build_q_table():
     q_table = {}
 
-    for utilization_bin in range(3):
+    for least_utilized_bin in range(NUM_PATHS):
         for demand_bin in range(3):
-            for previous_action in range(2):
-                state = f"{utilization_bin}_{demand_bin}_{previous_action}"
-                q_table[state] = {"0": 0.0, "1": 0.0}
+            for previous_action in range(NUM_PATHS):
+                state = f"{least_utilized_bin}_{demand_bin}_{previous_action}"
+                q_table[state] = {
+                    str(action): 0.0
+                    for action in ACTIONS
+                }
 
     return q_table
 
@@ -31,8 +38,8 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
 
     os.makedirs("data", exist_ok=True)
 
-    with open("data/training_rewards.csv", "w", newline="") as reward_file, \
-         open("data/training_steps.csv", "w", newline="") as step_file:
+    with open(TRAINING_REWARDS_FILE, "w", newline="") as reward_file, \
+         open(TRAINING_STEPS_FILE, "w", newline="") as step_file:
 
         reward_writer = csv.writer(reward_file)
         step_writer = csv.writer(step_file)
@@ -55,8 +62,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
             "dst",
             "start_time",
             "size_kb",
-            "upper_load",
-            "lower_load",
+            "path_loads",
             "selected_load",
             "raw_delay",
             "raw_packet_loss",
@@ -80,9 +86,11 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
                 state_key = str(state)
 
                 if state_key not in q_table:
-                    q_table[state_key] = {"0": 0.0, "1": 0.0}
+                    q_table[state_key] = {
+                        str(action): 0.0
+                        for action in ACTIONS
+                    }
 
-                # Epsilon-greedy action selection.
                 if random.random() < epsilon:
                     action = random.choice(ACTIONS)
                 else:
@@ -96,7 +104,10 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
                 next_state_key = str(next_state)
 
                 if next_state_key not in q_table:
-                    q_table[next_state_key] = {"0": 0.0, "1": 0.0}
+                    q_table[next_state_key] = {
+                        str(a): 0.0
+                        for a in ACTIONS
+                    }
 
                 old_q = q_table[state_key][str(action)]
                 best_next_q = max(q_table[next_state_key].values())
@@ -115,14 +126,13 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
                     step_count,
                     state_key,
                     action,
-                    ACTION_NAMES[action],
+                    ACTION_TO_PATH[str(action)],
                     info["flow_id"],
                     info["src"],
                     info["dst"],
                     info["start_time"],
                     info["size_kb"],
-                    info["upper_load"],
-                    info["lower_load"],
+                    info["path_loads"],
                     info["selected_load"],
                     info["raw_delay"],
                     info["raw_packet_loss"],
@@ -158,18 +168,18 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
 
             epsilon = max(0.05, epsilon * 0.995)
 
-    with open("data/q_table.json", "w") as f:
+    with open(Q_TABLE_FILE, "w") as f:
         json.dump(q_table, f, indent=4)
 
     print()
     print("Training complete.")
-    print("Saved:")
-    print("- data/q_table.json")
-    print("- data/training_rewards.csv")
-    print("- data/training_steps.csv")
+    print(f"Saved Q-table to: {Q_TABLE_FILE}")
+    print(f"Saved rewards to: {TRAINING_REWARDS_FILE}")
+    print(f"Saved steps to:   {TRAINING_STEPS_FILE}")
     print()
+    print(f"Paths: {PATHS}")
     print(f"Q-table states: {len(q_table)}")
-    print(f"Q-values: {len(q_table) * 2}")
+    print(f"Q-values: {len(q_table) * NUM_PATHS}")
     print()
     print("Sample learned states:")
 
@@ -178,7 +188,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
         best_action = max(values, key=values.get)
         print(
             f"state={state}, "
-            f"best_action={ACTION_NAMES[int(best_action)]}, "
+            f"best_action={ACTION_TO_PATH[best_action]}, "
             f"values={values}"
         )
 

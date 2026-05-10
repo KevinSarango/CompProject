@@ -2,12 +2,12 @@ import csv
 import os
 import time
 
+from config import PATHS, TOPO_MODE
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
+from ryu.lib.packet import arp, ethernet, ether_types, icmp, in_proto, ipv4, packet, tcp
 from ryu.ofproto import ofproto_v1_3
-from ryu.lib.packet import packet, ethernet, arp, ipv4, tcp, icmp
-from ryu.lib.packet import ether_types, in_proto
 
 
 class BaseMultipathController(app_manager.RyuApp):
@@ -47,8 +47,53 @@ class BaseMultipathController(app_manager.RyuApp):
             "10.0.0.8": 4,
         }
 
+        self.path_ports = self.build_path_ports()
+
         os.makedirs("data", exist_ok=True)
         self.init_metrics_file()
+
+    def build_path_ports(self):
+        if TOPO_MODE == "diamond":
+            return {
+                "upper": {
+                    "middle_dpid": 2,
+                    "s1_to_middle": 5,
+                    "middle_to_s1": 1,
+                    "middle_to_s4": 2,
+                    "s4_to_middle": 5,
+                },
+                "lower": {
+                    "middle_dpid": 3,
+                    "s1_to_middle": 6,
+                    "middle_to_s1": 1,
+                    "middle_to_s4": 2,
+                    "s4_to_middle": 6,
+                },
+            }
+
+        return {
+            "low_delay": {
+                "middle_dpid": 2,
+                "s1_to_middle": 5,
+                "middle_to_s1": 1,
+                "middle_to_s4": 2,
+                "s4_to_middle": 5,
+            },
+            "balanced": {
+                "middle_dpid": 3,
+                "s1_to_middle": 6,
+                "middle_to_s1": 1,
+                "middle_to_s4": 2,
+                "s4_to_middle": 6,
+            },
+            "high_bw": {
+                "middle_dpid": 5,
+                "s1_to_middle": 7,
+                "middle_to_s1": 1,
+                "middle_to_s4": 2,
+                "s4_to_middle": 7,
+            },
+        }
 
     def init_metrics_file(self):
         with open(self.METRICS_FILE, "w", newline="") as f:
@@ -78,7 +123,7 @@ class BaseMultipathController(app_manager.RyuApp):
                 path,
             ])
 
-    def choose_path(self, src, dst):
+    def choose_path(self, src, dst, flow_info=None):
         raise NotImplementedError("Subclasses must implement choose_path")
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -89,8 +134,6 @@ class BaseMultipathController(app_manager.RyuApp):
         ofp = dp.ofproto
         parser = dp.ofproto_parser
 
-        # Table miss only.
-        # No more pre-installing all host-pair paths.
         match = parser.OFPMatch()
         actions = [
             parser.OFPActionOutput(
@@ -100,7 +143,6 @@ class BaseMultipathController(app_manager.RyuApp):
         ]
 
         self.add_flow(dp, 0, match, actions)
-
         self.logger.info("[%s] Switch connected: s%s", self.POLICY_NAME, dp.id)
 
     def add_flow(self, dp, priority, match, actions, idle_timeout=30, hard_timeout=0):
@@ -146,13 +188,6 @@ class BaseMultipathController(app_manager.RyuApp):
         return None
 
     def install_tcp_path(self, src_ip, dst_ip, tcp_src, tcp_dst, path):
-        """
-        Install exact 5-tuple TCP rules for one TrafPy/iperf flow.
-        This is the important fix: every unique iperf port can get its own path.
-        """
-
-        parser1 = self.datapaths[1].ofproto_parser
-
         forward_match = {
             "eth_type": ether_types.ETH_TYPE_IP,
             "ip_proto": in_proto.IPPROTO_TCP,
@@ -175,11 +210,6 @@ class BaseMultipathController(app_manager.RyuApp):
         self.install_path_matches(reverse_match, dst_ip, src_ip, path, priority=300)
 
     def install_icmp_path(self, src_ip, dst_ip, path):
-        """
-        ICMP rule for ping/pingall.
-        Lower priority than TCP so it does not override per-flow iperf decisions.
-        """
-
         forward_match = {
             "eth_type": ether_types.ETH_TYPE_IP,
             "ip_proto": in_proto.IPPROTO_ICMP,
@@ -204,68 +234,72 @@ class BaseMultipathController(app_manager.RyuApp):
         if src_side is None or dst_side is None:
             return
 
-        # Same-side traffic on s1.
         if src_side == "top" and dst_side == "top":
             parser = self.datapaths[1].ofproto_parser
-            match = parser.OFPMatch(**match_fields)
-            self.install_match(1, match, self.top_hosts[dst_ip], priority)
+            self.install_match(1, parser.OFPMatch(**match_fields), self.top_hosts[dst_ip], priority)
             return
 
-        # Same-side traffic on s4.
         if src_side == "bottom" and dst_side == "bottom":
             parser = self.datapaths[4].ofproto_parser
-            match = parser.OFPMatch(**match_fields)
-            self.install_match(4, match, self.bottom_hosts[dst_ip], priority)
+            self.install_match(4, parser.OFPMatch(**match_fields), self.bottom_hosts[dst_ip], priority)
             return
 
-        # Top -> Bottom
+        if path not in self.path_ports:
+            path = PATHS[0]
+
+        path_info = self.path_ports[path]
+        middle_dpid = path_info["middle_dpid"]
+
         if src_side == "top" and dst_side == "bottom":
-            if path == "upper":
-                # s1 -> s2 -> s4
-                parser = self.datapaths[1].ofproto_parser
-                self.install_match(1, parser.OFPMatch(**match_fields), 5, priority)
+            parser = self.datapaths[1].ofproto_parser
+            self.install_match(
+                1,
+                parser.OFPMatch(**match_fields),
+                path_info["s1_to_middle"],
+                priority,
+            )
 
-                parser = self.datapaths[2].ofproto_parser
-                self.install_match(2, parser.OFPMatch(**match_fields), 2, priority)
+            parser = self.datapaths[middle_dpid].ofproto_parser
+            self.install_match(
+                middle_dpid,
+                parser.OFPMatch(**match_fields),
+                path_info["middle_to_s4"],
+                priority,
+            )
 
-                parser = self.datapaths[4].ofproto_parser
-                self.install_match(4, parser.OFPMatch(**match_fields), self.bottom_hosts[dst_ip], priority)
-            else:
-                # s1 -> s3 -> s4
-                parser = self.datapaths[1].ofproto_parser
-                self.install_match(1, parser.OFPMatch(**match_fields), 6, priority)
-
-                parser = self.datapaths[3].ofproto_parser
-                self.install_match(3, parser.OFPMatch(**match_fields), 2, priority)
-
-                parser = self.datapaths[4].ofproto_parser
-                self.install_match(4, parser.OFPMatch(**match_fields), self.bottom_hosts[dst_ip], priority)
-
+            parser = self.datapaths[4].ofproto_parser
+            self.install_match(
+                4,
+                parser.OFPMatch(**match_fields),
+                self.bottom_hosts[dst_ip],
+                priority,
+            )
             return
 
-        # Bottom -> Top
         if src_side == "bottom" and dst_side == "top":
-            if path == "upper":
-                # s4 -> s2 -> s1
-                parser = self.datapaths[4].ofproto_parser
-                self.install_match(4, parser.OFPMatch(**match_fields), 5, priority)
+            parser = self.datapaths[4].ofproto_parser
+            self.install_match(
+                4,
+                parser.OFPMatch(**match_fields),
+                path_info["s4_to_middle"],
+                priority,
+            )
 
-                parser = self.datapaths[2].ofproto_parser
-                self.install_match(2, parser.OFPMatch(**match_fields), 1, priority)
+            parser = self.datapaths[middle_dpid].ofproto_parser
+            self.install_match(
+                middle_dpid,
+                parser.OFPMatch(**match_fields),
+                path_info["middle_to_s1"],
+                priority,
+            )
 
-                parser = self.datapaths[1].ofproto_parser
-                self.install_match(1, parser.OFPMatch(**match_fields), self.top_hosts[dst_ip], priority)
-            else:
-                # s4 -> s3 -> s1
-                parser = self.datapaths[4].ofproto_parser
-                self.install_match(4, parser.OFPMatch(**match_fields), 6, priority)
-
-                parser = self.datapaths[3].ofproto_parser
-                self.install_match(3, parser.OFPMatch(**match_fields), 1, priority)
-
-                parser = self.datapaths[1].ofproto_parser
-                self.install_match(1, parser.OFPMatch(**match_fields), self.top_hosts[dst_ip], priority)
-
+            parser = self.datapaths[1].ofproto_parser
+            self.install_match(
+                1,
+                parser.OFPMatch(**match_fields),
+                self.top_hosts[dst_ip],
+                priority,
+            )
             return
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
@@ -274,13 +308,11 @@ class BaseMultipathController(app_manager.RyuApp):
         dp = msg.datapath
 
         pkt = packet.Packet(msg.data)
-
         eth_pkt = pkt.get_protocol(ethernet.ethernet)
 
         if eth_pkt is None:
             return
 
-        # Ignore LLDP and other non-IP/ARP control traffic.
         if eth_pkt.ethertype == ether_types.ETH_TYPE_LLDP:
             return
 
@@ -301,11 +333,15 @@ class BaseMultipathController(app_manager.RyuApp):
         if src_ip not in self.ip_to_mac or dst_ip not in self.ip_to_mac:
             return
 
-        # TCP / iperf flow.
         tcp_pkt = pkt.get_protocol(tcp.tcp)
 
         if tcp_pkt is not None:
-            path = self.choose_path(src_ip, dst_ip)
+            flow_info = {
+                "tcp_src": tcp_pkt.src_port,
+                "tcp_dst": tcp_pkt.dst_port,
+            }
+
+            path = self.choose_path(src_ip, dst_ip, flow_info=flow_info)
 
             self.log_decision(
                 proto="tcp",
@@ -327,11 +363,10 @@ class BaseMultipathController(app_manager.RyuApp):
             self.send_packet_out(dp, msg)
             return
 
-        # ICMP / ping.
         icmp_pkt = pkt.get_protocol(icmp.icmp)
 
         if icmp_pkt is not None:
-            path = self.choose_path(src_ip, dst_ip)
+            path = self.choose_path(src_ip, dst_ip, flow_info=None)
 
             self.log_decision(
                 proto="icmp",
@@ -394,11 +429,6 @@ class BaseMultipathController(app_manager.RyuApp):
         dp.send_msg(out)
 
     def send_packet_out(self, dp, msg):
-        """
-        Sends the triggering packet back through the switch after rules are installed.
-        The next packets in the flow should match installed rules.
-        """
-
         ofp = dp.ofproto
         parser = dp.ofproto_parser
         in_port = msg.match["in_port"]

@@ -2,49 +2,63 @@ import json
 import os
 
 from config import (
+    ACTION_TO_PATH,
     DEFAULT_FLOW_SIZE_KB,
-    LOAD_BALANCE_LIMIT_KB,
     MEDIUM_FLOW_KB,
+    NUM_PATHS,
+    PATH_CAPACITY_KB,
+    Q_TABLE_FILE,
     SMALL_FLOW_KB,
     UTILIZATION_DIFF_THRESHOLD,
 )
 
 
-ACTION_TO_PATH = {
-    "0": "upper",
-    "1": "lower",
-}
-
-CURRENT_STATE = "1_1_0"
+CURRENT_STATE = None
 
 
 def load_q_table():
-    path = "data/q_table.json"
-
-    if not os.path.exists(path):
-        print("[WARN] data/q_table.json not found. Using fallback policy.")
+    if not os.path.exists(Q_TABLE_FILE):
+        print(f"[WARN] {Q_TABLE_FILE} not found. Using fallback policy.")
         return None
 
-    with open(path, "r") as f:
+    with open(Q_TABLE_FILE, "r") as f:
         return json.load(f)
 
 
 Q_TABLE = load_q_table()
 
 
-def get_utilization_bin(upper_load, lower_load):
-    upper_util = upper_load / LOAD_BALANCE_LIMIT_KB
-    lower_util = lower_load / LOAD_BALANCE_LIMIT_KB
+def get_path_utilizations(path_loads):
+    utilizations = []
 
-    diff = upper_util - lower_util
+    for index, load in enumerate(path_loads):
+        capacity = PATH_CAPACITY_KB[index]
+        utilizations.append(load / capacity)
 
-    if diff < -UTILIZATION_DIFF_THRESHOLD:
+    return utilizations
+
+
+def get_least_utilized_path_bin(path_loads):
+    """
+    Returns the path index with the lowest utilization.
+
+    Utilization is path_load / path_specific_capacity.
+    This matters because the three-path topology has unequal capacities.
+    """
+
+    utilizations = get_path_utilizations(path_loads)
+
+    min_util = min(utilizations)
+    max_util = max(utilizations)
+
+    # If all paths are close, treat it as the middle/balanced state
+    # when three paths are available.
+    if max_util - min_util <= UTILIZATION_DIFF_THRESHOLD:
+        if NUM_PATHS == 3:
+            return 1
         return 0
 
-    if diff > UTILIZATION_DIFF_THRESHOLD:
-        return 2
-
-    return 1
+    return utilizations.index(min_util)
 
 
 def get_demand_bin(flow_size_kb):
@@ -57,10 +71,10 @@ def get_demand_bin(flow_size_kb):
     return 2
 
 
-def build_state(upper_load, lower_load, flow_size_kb, previous_action):
-    utilization_bin = get_utilization_bin(upper_load, lower_load)
+def build_state(path_loads, flow_size_kb, previous_action):
+    least_utilized_bin = get_least_utilized_path_bin(path_loads)
     demand_bin = get_demand_bin(flow_size_kb)
-    return f"{utilization_bin}_{demand_bin}_{previous_action}"
+    return f"{least_utilized_bin}_{demand_bin}_{previous_action}"
 
 
 def set_network_state(state):
@@ -75,6 +89,7 @@ def choose_path(src_ip, dst_ip, state=None):
         action = max(Q_TABLE[selected_state], key=Q_TABLE[selected_state].get)
         return ACTION_TO_PATH[action]
 
-    # Fallback if Q-table is missing or state was not trained.
+    # Fallback if Q-table is missing or state is unknown.
     dst_num = int(dst_ip.split(".")[-1])
-    return "upper" if dst_num % 2 == 0 else "lower"
+    fallback_action = dst_num % NUM_PATHS
+    return ACTION_TO_PATH[str(fallback_action)]
