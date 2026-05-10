@@ -1,4 +1,5 @@
 import argparse
+import sys
 import time
 
 from mininet.net import Mininet
@@ -34,11 +35,51 @@ class DiamondTopo(Topo):
             )
             self.addLink(h, s4, port2=i - 4)
 
-        # Lower bandwidth to make congestion easier to observe.
-        self.addLink(s1, s2, port1=5, port2=1, bw=3, delay="10ms")
-        self.addLink(s1, s3, port1=6, port2=1, bw=3, delay="10ms")
-        self.addLink(s2, s4, port1=2, port2=5, bw=3, delay="10ms")
-        self.addLink(s3, s4, port1=2, port2=6, bw=3, delay="10ms")
+        # Diamond multipath links.
+        self.addLink(s1, s2, port1=5, port2=1, bw=5, delay="5ms")
+        self.addLink(s1, s3, port1=6, port2=1, bw=5, delay="5ms")
+        self.addLink(s2, s4, port1=2, port2=5, bw=5, delay="5ms")
+        self.addLink(s3, s4, port1=2, port2=6, bw=5, delay="5ms")
+
+
+def verify_connectivity(net, max_attempts=3):
+    """
+    Run pingall up to max_attempts times.
+
+    If all hosts connect, continue.
+    If pingall fails after max_attempts, stop the network and exit.
+    """
+
+    print()
+    print("====================================")
+    print(" Verifying host connectivity")
+    print("====================================")
+
+    for attempt in range(1, max_attempts + 1):
+        print(f"*** pingall attempt {attempt}/{max_attempts}")
+
+        packet_loss_percent = net.pingAll()
+
+        if packet_loss_percent == 0:
+            print("*** Connectivity verified: 0% packet loss")
+            print("====================================")
+            print()
+            return True
+
+        print(f"*** Connectivity failed: {packet_loss_percent}% packet loss")
+
+        if attempt < max_attempts:
+            print("*** Waiting before retry...")
+            time.sleep(2)
+
+    print()
+    print("[ERROR] Host connectivity failed after 3 pingall attempts.")
+    print("[ERROR] Stopping Mininet and exiting.")
+    print("====================================")
+    print()
+
+    net.stop()
+    sys.exit(1)
 
 
 def run(policy_name=None):
@@ -63,7 +104,11 @@ def run(policy_name=None):
 
     print("*** Network started")
 
+    # Give Ryu time to connect switches and install rules.
     time.sleep(3)
+
+    # Verify all hosts can reach each other before running traffic tests.
+    verify_connectivity(net, max_attempts=3)
 
     if policy_name:
         run_automated_tests(net, policy_name)

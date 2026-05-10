@@ -65,8 +65,10 @@ def read_traffic_metrics(path):
         for row in reader:
             rows.append({
                 "policy": row["policy"],
+                "flow_id": int(row["flow_id"]),
                 "src": row["src"],
                 "dst": row["dst"],
+                "size_kb": float(row["size_kb"]),
                 "throughput_mbps": float(row["throughput_mbps"]),
                 "latency_ms": float(row["latency_ms"]),
                 "packet_loss_percent": float(row["packet_loss_percent"]),
@@ -96,11 +98,11 @@ def print_path_summary(name, summary):
         return
 
     print()
-    print(f"{name} Path Usage")
+    print(f"{name} Controller Path Decisions")
     print("-" * 35)
-    print(f"Total flows:   {summary['total_flows']}")
-    print(f"Upper path:    {summary['upper']} ({summary['upper_percent']}%)")
-    print(f"Lower path:    {summary['lower']} ({summary['lower_percent']}%)")
+    print(f"Total decisions: {summary['total_flows']}")
+    print(f"Upper path:      {summary['upper']} ({summary['upper_percent']}%)")
+    print(f"Lower path:      {summary['lower']} ({summary['lower_percent']}%)")
 
 
 def print_traffic_summary(name, summary):
@@ -139,8 +141,8 @@ def plot_path_usage(fifo_summary, rl_summary):
     )
 
     plt.xticks(list(x), labels)
-    plt.ylabel("Number of Flows")
-    plt.title("FIFO vs RL Path Usage")
+    plt.ylabel("Number of Controller Decisions")
+    plt.title("FIFO vs RL Controller Path Decisions")
     plt.legend()
 
     plt.savefig(
@@ -252,6 +254,10 @@ def main():
     print("- data/plots/fifo_vs_rl_throughput.png")
     print("- data/plots/fifo_vs_rl_latency.png")
     print("- data/plots/fifo_vs_rl_packet_loss.png")
+    print()
+    print("Note:")
+    print("The path usage plot currently shows controller path decisions, not per-TrafPy-flow path decisions.")
+    print("For true per-flow path usage, the controller must install rules per TCP flow/port.")
 
 
 if __name__ == "__main__":

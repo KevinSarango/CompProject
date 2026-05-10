@@ -32,18 +32,21 @@ class SimpleSDNEnv:
         self.upper_load = 0.0
         self.lower_load = 0.0
 
-        # Capacity is now in KB because the demand file uses size_kb.
-        # Lower capacity makes congestion show up with 100–1000 KB flows.
-        self.path_capacity_kb = 2500.0
+        # Capacity is in KB because the demand file uses size_kb.
+        # Increased from 2500 to avoid making every later flow catastrophic.
+        self.path_capacity_kb = 3000.0
 
-        # Simulates old flows completing over time.
+        # Faster decay means old flows finish faster in the training simulation.
         self.decay_factor = 0.85
 
         # Reward weights.
         self.gamma_packet_loss = 2.0
-        self.gamma_delay = 1.5
+        self.gamma_delay = 1.0
         self.gamma_throughput = 1.0
         self.gamma_action_impact = 1.0
+
+        # Makes reward easier to interpret.
+        self.base_reward = 1.0
 
     def load_demands(self):
         if not os.path.exists(self.demand_file):
@@ -108,6 +111,12 @@ class SimpleSDNEnv:
         return 2
 
     def calculate_action_impact(self, selected_load, other_load):
+        """
+        Approximate causal/action influence.
+
+        Positive means selected path was better than the alternative.
+        Negative means selected path was worse.
+        """
         impact = (other_load - selected_load) / self.path_capacity_kb
 
         if impact > 1.0:
@@ -125,6 +134,7 @@ class SimpleSDNEnv:
         demand = self.demands[self.current_index]
         flow_size = demand["size_kb"]
 
+        # Existing load decays to simulate previous flows completing.
         self.upper_load *= self.decay_factor
         self.lower_load *= self.decay_factor
 
@@ -155,10 +165,11 @@ class SimpleSDNEnv:
         )
 
         reward = (
-            -self.gamma_packet_loss * normalized_packet_loss
-            -self.gamma_delay * normalized_delay
-            +self.gamma_throughput * normalized_throughput
-            +self.gamma_action_impact * action_impact
+            self.base_reward
+            - self.gamma_packet_loss * normalized_packet_loss
+            - self.gamma_delay * normalized_delay
+            + self.gamma_throughput * normalized_throughput
+            + self.gamma_action_impact * action_impact
         )
 
         self.current_index += 1

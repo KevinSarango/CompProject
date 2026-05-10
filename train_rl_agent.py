@@ -142,7 +142,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
                 )
 
             # Epsilon decay: more exploration early, more exploitation later.
-            epsilon = max(0.05, epsilon * 0.995)
+            epsilon = max(0.05, epsilon * 0.997)
 
     with open("data/q_table.json", "w") as f:
         json.dump(q_table, f, indent=4)
