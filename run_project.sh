@@ -4,37 +4,23 @@ PROJECT_DIR="$HOME/CompProject"
 RYU_ENV="$HOME/ryu38"
 
 echo "========================================="
-echo "          Project Instructions"
+echo " Multipath SDN RL Project Instructions"
 echo "========================================="
 echo
 
-echo "========================================="
-echo " Step 1: Train RL model"
-echo "========================================="
+echo "Step 1: Generate TrafPy-style traffic demands"
+echo "cd $PROJECT_DIR"
+echo "python3 generate_trafpy_demands.py"
+echo
+
+echo "Step 2: Train RL agent on the same traffic demands"
 echo "cd $PROJECT_DIR"
 echo "python3 train_rl_agent.py"
-echo
-echo "This creates:"
-echo "- data/q_table.json"
-echo "- data/training_rewards.csv"
-echo "- data/training_steps.csv"
-echo
-
-echo "========================================="
-echo " Step 2: Generate training graphs"
-echo "========================================="
-echo "cd $PROJECT_DIR"
 echo "python3 plot_training_results.py"
 echo
-echo "This creates:"
-echo "- data/plots/reward_curve_total.png"
-echo "- data/plots/reward_curve_average.png"
-echo "- data/plots/q_table_values.png"
-echo
 
-echo "========================================="
-echo " Step 3: FIFO baseline"
-echo "========================================="
+echo "Step 3: Run FIFO baseline"
+echo
 echo "Terminal 1:"
 echo "cd $PROJECT_DIR"
 echo "sudo mn -c"
@@ -45,14 +31,12 @@ echo "Terminal 2:"
 echo "cd $PROJECT_DIR"
 echo "sudo python3 diamond_topology.py --policy FIFO"
 echo
-echo "FIFO decisions saved to data/fifo_metrics.csv"
+echo "When tests finish:"
+echo "Inside Mininet, type: exit"
+echo "Then stop Ryu with CTRL+C"
 echo
 
-echo "========================================="
-echo " Step 4: RL controller"
-echo "========================================="
-echo "Stop Mininet with: exit"
-echo "Stop Ryu with: CTRL+C"
+echo "Step 4: Run RL controller"
 echo
 echo "Terminal 1:"
 echo "cd $PROJECT_DIR"
@@ -64,12 +48,22 @@ echo "Terminal 2:"
 echo "cd $PROJECT_DIR"
 echo "sudo python3 diamond_topology.py --policy RL"
 echo
-echo "RL decisions saved to data/rl_metrics.csv"
+echo "When tests finish:"
+echo "Inside Mininet, type: exit"
+echo "Then stop Ryu with CTRL+C"
 echo
 
-echo "========================================="
-echo " Step 5: Evaluate FIFO vs RL"
-echo "========================================="
+echo "Step 5: Evaluate FIFO vs RL"
 echo "cd $PROJECT_DIR"
 echo "python3 eval_fifo_vs_rl.py"
+echo
+
+echo "Important output files:"
+echo "- data/trafpy_demands.csv"
+echo "- data/q_table.json"
+echo "- data/training_rewards.csv"
+echo "- data/training_steps.csv"
+echo "- data/fifo_traffic_metrics.csv"
+echo "- data/rl_traffic_metrics.csv"
+echo "- data/plots/"
 echo

@@ -1,6 +1,7 @@
 import json
 import os
 
+
 ACTION_TO_PATH = {
     "0": "upper",
     "1": "lower",
@@ -35,5 +36,6 @@ def choose_path(src_ip, dst_ip):
         action = max(Q_TABLE[state], key=Q_TABLE[state].get)
         return ACTION_TO_PATH[action]
 
+    # Fallback if Q-table is missing.
     dst_num = int(dst_ip.split(".")[-1])
     return "upper" if dst_num % 2 == 0 else "lower"

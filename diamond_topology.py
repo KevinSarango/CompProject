@@ -1,13 +1,14 @@
+import argparse
+import time
+
 from mininet.net import Mininet
 from mininet.node import RemoteController, OVSSwitch
 from mininet.topo import Topo
 from mininet.link import TCLink
 from mininet.cli import CLI
 from mininet.log import setLogLevel
-from mininet_traffic import run_tests
+
 from automated_traffic_tests import run_automated_tests
-import argparse
-import time
 
 
 class DiamondTopo(Topo):
@@ -33,10 +34,11 @@ class DiamondTopo(Topo):
             )
             self.addLink(h, s4, port2=i - 4)
 
-        self.addLink(s1, s2, port1=5, port2=1, bw=10, delay="5ms")
-        self.addLink(s1, s3, port1=6, port2=1, bw=10, delay="5ms")
-        self.addLink(s2, s4, port1=2, port2=5, bw=10, delay="5ms")
-        self.addLink(s3, s4, port1=2, port2=6, bw=10, delay="5ms")
+        # Lower bandwidth to make congestion easier to observe.
+        self.addLink(s1, s2, port1=5, port2=1, bw=3, delay="10ms")
+        self.addLink(s1, s3, port1=6, port2=1, bw=3, delay="10ms")
+        self.addLink(s2, s4, port1=2, port2=5, bw=3, delay="10ms")
+        self.addLink(s3, s4, port1=2, port2=6, bw=3, delay="10ms")
 
 
 def run(policy_name=None):
@@ -61,16 +63,12 @@ def run(policy_name=None):
 
     print("*** Network started")
 
-    # Wait for controller rules to install
     time.sleep(3)
 
     if policy_name:
         run_automated_tests(net, policy_name)
 
-    # Automatically run tests
-    run_tests(net)
-
-    # Drop into Mininet CLI afterward
+    print("*** Dropping into Mininet CLI")
     CLI(net)
 
     print("*** Stopping network")
