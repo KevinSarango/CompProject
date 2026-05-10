@@ -1,8 +1,6 @@
 __pycache__/
 *.pyc
-DS_Store
+.DS_Store
 Pipfile.lock
-
-# Generated experiment data
 data/*.csv
 data/*.log

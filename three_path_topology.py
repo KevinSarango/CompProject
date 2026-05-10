@@ -74,7 +74,7 @@ class ThreePathTopo(Topo):
         )
         self.addLink(
             s2,
-            s4,
+            s5,
             port1=2,
             port2=5,
             bw=low["bw"],
@@ -92,7 +92,7 @@ class ThreePathTopo(Topo):
         )
         self.addLink(
             s3,
-            s4,
+            s5,
             port1=2,
             port2=6,
             bw=balanced["bw"],
@@ -102,15 +102,15 @@ class ThreePathTopo(Topo):
         # Path 2: high bandwidth, high delay
         self.addLink(
             s1,
-            s5,
+            s4,
             port1=7,
             port2=1,
             bw=high["bw"],
             delay=high["delay"],
         )
         self.addLink(
-            s5,
             s4,
+            s5,
             port1=2,
             port2=7,
             bw=high["bw"],
