@@ -11,7 +11,7 @@ This file is the single source of truth for:
 """
 
 # One shared load-balancing limit used across training and controller logic.
-LOAD_BALANCE_LIMIT_KB = 3000.0
+LOAD_BALANCE_LIMIT_KB = 2500.0
 
 # Shared load decay used by the training environment and RL controller.
 LOAD_DECAY_FACTOR = 0.85

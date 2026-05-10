@@ -6,10 +6,8 @@ from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
 from ryu.ofproto import ofproto_v1_3
-from ryu.lib.packet import packet, ethernet, arp, ipv4, tcp
-
-
-from config import DEFAULT_FLOW_SIZE_KB
+from ryu.lib.packet import packet, ethernet, arp, ipv4, tcp, icmp
+from ryu.lib.packet import ether_types, in_proto
 
 
 class BaseMultipathController(app_manager.RyuApp):
@@ -22,7 +20,6 @@ class BaseMultipathController(app_manager.RyuApp):
         super(BaseMultipathController, self).__init__(*args, **kwargs)
 
         self.datapaths = {}
-        self.installed = False
         self.flow_counter = 0
 
         self.ip_to_mac = {
@@ -50,8 +47,6 @@ class BaseMultipathController(app_manager.RyuApp):
             "10.0.0.8": 4,
         }
 
-        self.port_to_size_kb = self.load_trafpy_flow_sizes()
-
         os.makedirs("data", exist_ok=True)
         self.init_metrics_file()
 
@@ -61,59 +56,30 @@ class BaseMultipathController(app_manager.RyuApp):
             writer.writerow([
                 "timestamp",
                 "policy",
+                "proto",
                 "src",
                 "dst",
+                "src_port",
+                "dst_port",
                 "path",
-                "proto",
-                "tcp_dst",
-                "flow_size_kb",
             ])
 
-    def load_trafpy_flow_sizes(self):
-        """
-        automated_traffic_tests.py uses:
-            port = 5001 + flow_id
-
-        This lets Ryu map each TCP destination port back to the TrafPy flow size.
-        """
-        path = "data/trafpy_demands.csv"
-        port_to_size = {}
-
-        if not os.path.exists(path):
-            return port_to_size
-
-        with open(path, "r") as f:
-            reader = csv.DictReader(f)
-
-            for row in reader:
-                flow_id = int(row["flow_id"])
-                tcp_port = 5001 + flow_id
-                port_to_size[tcp_port] = float(row["size_kb"])
-
-        return port_to_size
-
-    def log_decision(self, src, dst, path, proto="unknown", tcp_dst="", flow_size_kb=""):
+    def log_decision(self, proto, src, dst, src_port, dst_port, path):
         with open(self.METRICS_FILE, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
                 time.time(),
                 self.POLICY_NAME,
+                proto,
                 src,
                 dst,
+                src_port,
+                dst_port,
                 path,
-                proto,
-                tcp_dst,
-                flow_size_kb,
             ])
 
-    def choose_path(self, src, dst, tcp_dst=None, flow_size_kb=None):
+    def choose_path(self, src, dst):
         raise NotImplementedError("Subclasses must implement choose_path")
-
-    def is_top_host(self, ip):
-        return ip in self.top_hosts
-
-    def is_bottom_host(self, ip):
-        return ip in self.bottom_hosts
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -123,7 +89,8 @@ class BaseMultipathController(app_manager.RyuApp):
         ofp = dp.ofproto
         parser = dp.ofproto_parser
 
-        # Table-miss sends unknown traffic to controller.
+        # Table miss only.
+        # No more pre-installing all host-pair paths.
         match = parser.OFPMatch()
         actions = [
             parser.OFPActionOutput(
@@ -136,11 +103,7 @@ class BaseMultipathController(app_manager.RyuApp):
 
         self.logger.info("[%s] Switch connected: s%s", self.POLICY_NAME, dp.id)
 
-        if len(self.datapaths) == 4 and not self.installed:
-            self.install_static_connectivity()
-            self.installed = True
-
-    def add_flow(self, dp, priority, match, actions):
+    def add_flow(self, dp, priority, match, actions, idle_timeout=30, hard_timeout=0):
         ofp = dp.ofproto
         parser = dp.ofproto_parser
 
@@ -156,198 +119,245 @@ class BaseMultipathController(app_manager.RyuApp):
             priority=priority,
             match=match,
             instructions=inst,
+            idle_timeout=idle_timeout,
+            hard_timeout=hard_timeout,
         )
 
         dp.send_msg(mod)
 
-    def install_flow(self, dpid, priority, match_kwargs, out_port):
-        dp = self.datapaths[dpid]
+    def install_match(self, dpid, match, out_port, priority=200):
+        dp = self.datapaths.get(dpid)
+
+        if dp is None:
+            self.logger.warning("Datapath s%s not connected yet", dpid)
+            return
+
         parser = dp.ofproto_parser
-
-        match = parser.OFPMatch(**match_kwargs)
         actions = [parser.OFPActionOutput(out_port)]
-
         self.add_flow(dp, priority, match, actions)
 
-    def install_static_connectivity(self):
+    def get_host_side(self, ip_addr):
+        if ip_addr in self.top_hosts:
+            return "top"
+
+        if ip_addr in self.bottom_hosts:
+            return "bottom"
+
+        return None
+
+    def install_tcp_path(self, src_ip, dst_ip, tcp_src, tcp_dst, path):
         """
-        Installs:
-        - same-side IPv4 rules
-        - ICMP rules for pingall connectivity
-
-        TCP top-to-bottom traffic is NOT preinstalled.
-        TCP flows are handled dynamically per TrafPy/iperf flow.
+        Install exact 5-tuple TCP rules for one TrafPy/iperf flow.
+        This is the important fix: every unique iperf port can get its own path.
         """
 
-        hosts = list(self.top_hosts.keys()) + list(self.bottom_hosts.keys())
-
-        for src in hosts:
-            for dst in hosts:
-                if src == dst:
-                    continue
-
-                src_top = self.is_top_host(src)
-                dst_top = self.is_top_host(dst)
-
-                # Same side on s1.
-                if src_top and dst_top:
-                    self.install_flow(
-                        1,
-                        100,
-                        {
-                            "eth_type": 0x0800,
-                            "ipv4_src": src,
-                            "ipv4_dst": dst,
-                        },
-                        self.top_hosts[dst],
-                    )
-
-                # Same side on s4.
-                elif not src_top and not dst_top:
-                    self.install_flow(
-                        4,
-                        100,
-                        {
-                            "eth_type": 0x0800,
-                            "ipv4_src": src,
-                            "ipv4_dst": dst,
-                        },
-                        self.bottom_hosts[dst],
-                    )
-
-                # Different sides: install ICMP only for pingall.
-                else:
-                    path = "upper" if int(dst.split(".")[-1]) % 2 == 0 else "lower"
-
-                    self.install_ip_proto_path(
-                        src=src,
-                        dst=dst,
-                        path=path,
-                        ip_proto=1,
-                        priority=90,
-                    )
-
-        self.logger.info(
-            "[%s] Installed static same-side IPv4 and cross-side ICMP rules",
-            self.POLICY_NAME,
-        )
-
-    def install_ip_proto_path(self, src, dst, path, ip_proto, priority=90):
-        match_kwargs = {
-            "eth_type": 0x0800,
-            "ip_proto": ip_proto,
-            "ipv4_src": src,
-            "ipv4_dst": dst,
-        }
-
-        self.install_path_match(src, dst, path, match_kwargs, priority)
-
-    def install_tcp_path(self, src, dst, path, tcp_dst):
-        """
-        Install TCP rules for one TrafPy/iperf flow.
-
-        Forward flow:
-            src -> dst, tcp_dst = iperf server port
-
-        Reverse flow:
-            dst -> src, tcp_src = iperf server port
-        """
+        parser1 = self.datapaths[1].ofproto_parser
 
         forward_match = {
-            "eth_type": 0x0800,
-            "ip_proto": 6,
-            "ipv4_src": src,
-            "ipv4_dst": dst,
+            "eth_type": ether_types.ETH_TYPE_IP,
+            "ip_proto": in_proto.IPPROTO_TCP,
+            "ipv4_src": src_ip,
+            "ipv4_dst": dst_ip,
+            "tcp_src": tcp_src,
             "tcp_dst": tcp_dst,
         }
 
         reverse_match = {
-            "eth_type": 0x0800,
-            "ip_proto": 6,
-            "ipv4_src": dst,
-            "ipv4_dst": src,
+            "eth_type": ether_types.ETH_TYPE_IP,
+            "ip_proto": in_proto.IPPROTO_TCP,
+            "ipv4_src": dst_ip,
+            "ipv4_dst": src_ip,
             "tcp_src": tcp_dst,
+            "tcp_dst": tcp_src,
         }
 
-        self.install_path_match(src, dst, path, forward_match, priority=200)
-        self.install_path_match(dst, src, path, reverse_match, priority=200)
+        self.install_path_matches(forward_match, src_ip, dst_ip, path, priority=300)
+        self.install_path_matches(reverse_match, dst_ip, src_ip, path, priority=300)
 
-    def install_path_match(self, src, dst, path, match_kwargs, priority):
+    def install_icmp_path(self, src_ip, dst_ip, path):
         """
-        Installs a match along either upper or lower path.
-        Handles both top->bottom and bottom->top directions.
+        ICMP rule for ping/pingall.
+        Lower priority than TCP so it does not override per-flow iperf decisions.
         """
 
-        src_top = self.is_top_host(src)
-        dst_top = self.is_top_host(dst)
+        forward_match = {
+            "eth_type": ether_types.ETH_TYPE_IP,
+            "ip_proto": in_proto.IPPROTO_ICMP,
+            "ipv4_src": src_ip,
+            "ipv4_dst": dst_ip,
+        }
 
-        if src_top and not dst_top:
-            # Top -> bottom
+        reverse_match = {
+            "eth_type": ether_types.ETH_TYPE_IP,
+            "ip_proto": in_proto.IPPROTO_ICMP,
+            "ipv4_src": dst_ip,
+            "ipv4_dst": src_ip,
+        }
+
+        self.install_path_matches(forward_match, src_ip, dst_ip, path, priority=150)
+        self.install_path_matches(reverse_match, dst_ip, src_ip, path, priority=150)
+
+    def install_path_matches(self, match_fields, src_ip, dst_ip, path, priority):
+        src_side = self.get_host_side(src_ip)
+        dst_side = self.get_host_side(dst_ip)
+
+        if src_side is None or dst_side is None:
+            return
+
+        # Same-side traffic on s1.
+        if src_side == "top" and dst_side == "top":
+            parser = self.datapaths[1].ofproto_parser
+            match = parser.OFPMatch(**match_fields)
+            self.install_match(1, match, self.top_hosts[dst_ip], priority)
+            return
+
+        # Same-side traffic on s4.
+        if src_side == "bottom" and dst_side == "bottom":
+            parser = self.datapaths[4].ofproto_parser
+            match = parser.OFPMatch(**match_fields)
+            self.install_match(4, match, self.bottom_hosts[dst_ip], priority)
+            return
+
+        # Top -> Bottom
+        if src_side == "top" and dst_side == "bottom":
             if path == "upper":
-                self.install_flow(1, priority, match_kwargs, 5)
-                self.install_flow(2, priority, match_kwargs, 2)
-                self.install_flow(4, priority, match_kwargs, self.bottom_hosts[dst])
-            else:
-                self.install_flow(1, priority, match_kwargs, 6)
-                self.install_flow(3, priority, match_kwargs, 2)
-                self.install_flow(4, priority, match_kwargs, self.bottom_hosts[dst])
+                # s1 -> s2 -> s4
+                parser = self.datapaths[1].ofproto_parser
+                self.install_match(1, parser.OFPMatch(**match_fields), 5, priority)
 
-        elif not src_top and dst_top:
-            # Bottom -> top
+                parser = self.datapaths[2].ofproto_parser
+                self.install_match(2, parser.OFPMatch(**match_fields), 2, priority)
+
+                parser = self.datapaths[4].ofproto_parser
+                self.install_match(4, parser.OFPMatch(**match_fields), self.bottom_hosts[dst_ip], priority)
+            else:
+                # s1 -> s3 -> s4
+                parser = self.datapaths[1].ofproto_parser
+                self.install_match(1, parser.OFPMatch(**match_fields), 6, priority)
+
+                parser = self.datapaths[3].ofproto_parser
+                self.install_match(3, parser.OFPMatch(**match_fields), 2, priority)
+
+                parser = self.datapaths[4].ofproto_parser
+                self.install_match(4, parser.OFPMatch(**match_fields), self.bottom_hosts[dst_ip], priority)
+
+            return
+
+        # Bottom -> Top
+        if src_side == "bottom" and dst_side == "top":
             if path == "upper":
-                self.install_flow(4, priority, match_kwargs, 5)
-                self.install_flow(2, priority, match_kwargs, 1)
-                self.install_flow(1, priority, match_kwargs, self.top_hosts[dst])
+                # s4 -> s2 -> s1
+                parser = self.datapaths[4].ofproto_parser
+                self.install_match(4, parser.OFPMatch(**match_fields), 5, priority)
+
+                parser = self.datapaths[2].ofproto_parser
+                self.install_match(2, parser.OFPMatch(**match_fields), 1, priority)
+
+                parser = self.datapaths[1].ofproto_parser
+                self.install_match(1, parser.OFPMatch(**match_fields), self.top_hosts[dst_ip], priority)
             else:
-                self.install_flow(4, priority, match_kwargs, 6)
-                self.install_flow(3, priority, match_kwargs, 1)
-                self.install_flow(1, priority, match_kwargs, self.top_hosts[dst])
+                # s4 -> s3 -> s1
+                parser = self.datapaths[4].ofproto_parser
+                self.install_match(4, parser.OFPMatch(**match_fields), 6, priority)
 
-    def get_first_hop_out_port(self, dpid, src, dst, path):
-        src_top = self.is_top_host(src)
-        dst_top = self.is_top_host(dst)
+                parser = self.datapaths[3].ofproto_parser
+                self.install_match(3, parser.OFPMatch(**match_fields), 1, priority)
 
-        if src_top and not dst_top:
-            if dpid == 1:
-                return 5 if path == "upper" else 6
+                parser = self.datapaths[1].ofproto_parser
+                self.install_match(1, parser.OFPMatch(**match_fields), self.top_hosts[dst_ip], priority)
 
-        elif not src_top and dst_top:
-            if dpid == 4:
-                return 5 if path == "upper" else 6
+            return
 
-        return None
-
-    def send_packet_out(self, msg, out_port):
+    @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
+    def packet_in_handler(self, ev):
+        msg = ev.msg
         dp = msg.datapath
-        ofp = dp.ofproto
-        parser = dp.ofproto_parser
 
-        actions = [parser.OFPActionOutput(out_port)]
+        pkt = packet.Packet(msg.data)
 
-        data = None
-        if msg.buffer_id == ofp.OFP_NO_BUFFER:
-            data = msg.data
+        eth_pkt = pkt.get_protocol(ethernet.ethernet)
 
-        out = parser.OFPPacketOut(
-            datapath=dp,
-            buffer_id=msg.buffer_id,
-            in_port=msg.match["in_port"],
-            actions=actions,
-            data=data,
-        )
+        if eth_pkt is None:
+            return
 
-        dp.send_msg(out)
+        # Ignore LLDP and other non-IP/ARP control traffic.
+        if eth_pkt.ethertype == ether_types.ETH_TYPE_LLDP:
+            return
 
-    def send_arp_reply(self, msg, eth_pkt, arp_pkt):
-        dp = msg.datapath
-        ofp = dp.ofproto
-        parser = dp.ofproto_parser
-        in_port = msg.match["in_port"]
+        arp_pkt = pkt.get_protocol(arp.arp)
+
+        if arp_pkt is not None:
+            self.handle_arp(dp, msg, eth_pkt, arp_pkt)
+            return
+
+        ip_pkt = pkt.get_protocol(ipv4.ipv4)
+
+        if ip_pkt is None:
+            return
+
+        src_ip = ip_pkt.src
+        dst_ip = ip_pkt.dst
+
+        if src_ip not in self.ip_to_mac or dst_ip not in self.ip_to_mac:
+            return
+
+        # TCP / iperf flow.
+        tcp_pkt = pkt.get_protocol(tcp.tcp)
+
+        if tcp_pkt is not None:
+            path = self.choose_path(src_ip, dst_ip)
+
+            self.log_decision(
+                proto="tcp",
+                src=src_ip,
+                dst=dst_ip,
+                src_port=tcp_pkt.src_port,
+                dst_port=tcp_pkt.dst_port,
+                path=path,
+            )
+
+            self.install_tcp_path(
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                tcp_src=tcp_pkt.src_port,
+                tcp_dst=tcp_pkt.dst_port,
+                path=path,
+            )
+
+            self.send_packet_out(dp, msg)
+            return
+
+        # ICMP / ping.
+        icmp_pkt = pkt.get_protocol(icmp.icmp)
+
+        if icmp_pkt is not None:
+            path = self.choose_path(src_ip, dst_ip)
+
+            self.log_decision(
+                proto="icmp",
+                src=src_ip,
+                dst=dst_ip,
+                src_port="",
+                dst_port="",
+                path=path,
+            )
+
+            self.install_icmp_path(src_ip, dst_ip, path)
+            self.send_packet_out(dp, msg)
+            return
+
+    def handle_arp(self, dp, msg, eth_pkt, arp_pkt):
+        if arp_pkt.opcode != arp.ARP_REQUEST:
+            return
 
         target_ip = arp_pkt.dst_ip
 
         if target_ip not in self.ip_to_mac:
             return
+
+        ofp = dp.ofproto
+        parser = dp.ofproto_parser
+        in_port = msg.match["in_port"]
 
         reply = packet.Packet()
 
@@ -355,7 +365,7 @@ class BaseMultipathController(app_manager.RyuApp):
             ethernet.ethernet(
                 dst=eth_pkt.src,
                 src=self.ip_to_mac[target_ip],
-                ethertype=0x0806,
+                ethertype=ether_types.ETH_TYPE_ARP,
             )
         )
 
@@ -383,69 +393,24 @@ class BaseMultipathController(app_manager.RyuApp):
 
         dp.send_msg(out)
 
-    @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
-    def packet_in_handler(self, ev):
-        msg = ev.msg
-        dp = msg.datapath
+    def send_packet_out(self, dp, msg):
+        """
+        Sends the triggering packet back through the switch after rules are installed.
+        The next packets in the flow should match installed rules.
+        """
 
-        pkt = packet.Packet(msg.data)
-        eth_pkt = pkt.get_protocol(ethernet.ethernet)
-        arp_pkt = pkt.get_protocol(arp.arp)
+        ofp = dp.ofproto
+        parser = dp.ofproto_parser
+        in_port = msg.match["in_port"]
 
-        if arp_pkt is not None:
-            if arp_pkt.opcode == arp.ARP_REQUEST:
-                self.send_arp_reply(msg, eth_pkt, arp_pkt)
-            return
+        actions = [parser.OFPActionOutput(ofp.OFPP_TABLE)]
 
-        ip_pkt = pkt.get_protocol(ipv4.ipv4)
-        tcp_pkt = pkt.get_protocol(tcp.tcp)
-
-        if ip_pkt is None or tcp_pkt is None:
-            return
-
-        src = ip_pkt.src
-        dst = ip_pkt.dst
-        tcp_dst = tcp_pkt.dst_port
-
-        # Only dynamically route cross-side TCP traffic.
-        if not (
-            (self.is_top_host(src) and self.is_bottom_host(dst))
-            or
-            (self.is_bottom_host(src) and self.is_top_host(dst))
-        ):
-            return
-
-        flow_size_kb = self.port_to_size_kb.get(tcp_dst, DEFAULT_FLOW_SIZE_KB)
-
-        path = self.choose_path(
-            src=src,
-            dst=dst,
-            tcp_dst=tcp_dst,
-            flow_size_kb=flow_size_kb,
+        out = parser.OFPPacketOut(
+            datapath=dp,
+            buffer_id=msg.buffer_id,
+            in_port=in_port,
+            actions=actions,
+            data=msg.data if msg.buffer_id == ofp.OFP_NO_BUFFER else None,
         )
 
-        self.install_tcp_path(src, dst, path, tcp_dst)
-
-        self.log_decision(
-            src=src,
-            dst=dst,
-            path=path,
-            proto="tcp",
-            tcp_dst=tcp_dst,
-            flow_size_kb=flow_size_kb,
-        )
-
-        out_port = self.get_first_hop_out_port(dp.id, src, dst, path)
-
-        if out_port is not None:
-            self.send_packet_out(msg, out_port)
-
-        self.logger.info(
-            "[%s] TCP flow src=%s dst=%s tcp_dst=%s size=%.1fKB path=%s",
-            self.POLICY_NAME,
-            src,
-            dst,
-            tcp_dst,
-            flow_size_kb,
-            path,
-        )
+        dp.send_msg(out)

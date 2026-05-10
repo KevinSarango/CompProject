@@ -1,0 +1,3 @@
+policy,tcp_decisions,upper_decisions,lower_decisions,upper_percent,lower_percent,traffic_tests,average_throughput_mbps,average_latency_ms,average_packet_loss_percent
+FIFO,100,50,50,50.0,50.0,100,0.9105000000000001,861.3778000000001,0.4
+RL,100,55,45,55.0,45.0,100,1.0359200000000002,781.6926000000001,0.0
