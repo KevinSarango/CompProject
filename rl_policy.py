@@ -1,19 +1,26 @@
 import json
 import os
 
+import numpy as np
+
 from config import (
     ACTION_TO_PATH,
-    DEFAULT_FLOW_SIZE_KB,
-    MEDIUM_FLOW_KB,
+    DEMAND_BINS,
+    MAX_DELAY_SCORE,
+    MAX_FLOW_SIZE_KB,
     NUM_PATHS,
     PATH_CAPACITY_KB,
+    PATH_DELAY_FACTOR,
     Q_TABLE_FILE,
-    SMALL_FLOW_KB,
-    UTILIZATION_DIFF_THRESHOLD,
+    STATE_BINS,
 )
 
 
 CURRENT_STATE = None
+
+
+PATH_CAPACITY_ARRAY = np.array(PATH_CAPACITY_KB, dtype=float)
+PATH_DELAY_FACTOR_ARRAY = np.array(PATH_DELAY_FACTOR, dtype=float)
 
 
 def load_q_table():
@@ -28,53 +35,50 @@ def load_q_table():
 Q_TABLE = load_q_table()
 
 
+def discretize(value, min_value, max_value, bins):
+    if bins <= 1 or max_value <= min_value:
+        return 0
+
+    value = max(min_value, min(float(value), max_value))
+    scaled = (value - min_value) / (max_value - min_value)
+    index = int(scaled * bins)
+    return min(index, bins - 1)
+
+
 def get_path_utilizations(path_loads):
-    utilizations = []
-
-    for index, load in enumerate(path_loads):
-        capacity = PATH_CAPACITY_KB[index]
-        utilizations.append(load / capacity)
-
-    return utilizations
+    loads = np.array(path_loads, dtype=float)
+    return loads / PATH_CAPACITY_ARRAY
 
 
-def get_least_utilized_path_bin(path_loads):
-    """
-    Returns the path index with the lowest utilization.
-
-    Utilization is path_load / path_specific_capacity.
-    This matters because the three-path topology has unequal capacities.
-    """
-
+def get_path_delay_scores(path_loads):
     utilizations = get_path_utilizations(path_loads)
-
-    min_util = min(utilizations)
-    max_util = max(utilizations)
-
-    # If all paths are close, treat it as the middle/balanced state
-    # when three paths are available.
-    if max_util - min_util <= UTILIZATION_DIFF_THRESHOLD:
-        if NUM_PATHS == 3:
-            return 1
-        return 0
-
-    return utilizations.index(min_util)
-
-
-def get_demand_bin(flow_size_kb):
-    if flow_size_kb <= SMALL_FLOW_KB:
-        return 0
-
-    if flow_size_kb <= MEDIUM_FLOW_KB:
-        return 1
-
-    return 2
+    raw_delay_scores = utilizations * 100.0 * PATH_DELAY_FACTOR_ARRAY
+    return np.clip(raw_delay_scores / MAX_DELAY_SCORE, 0.0, 1.0)
 
 
 def build_state(path_loads, flow_size_kb, previous_action):
-    least_utilized_bin = get_least_utilized_path_bin(path_loads)
-    demand_bin = get_demand_bin(flow_size_kb)
-    return f"{least_utilized_bin}_{demand_bin}_{previous_action}"
+    """
+    Build the same multipath ratio-state key used during training:
+        least_utilized_path_utilization_spread_bin_delay_spread_bin_demand_bin_previous_action
+    """
+    utilizations = get_path_utilizations(path_loads)
+    delay_scores = get_path_delay_scores(path_loads)
+
+    least_path = int(np.argmin(utilizations))
+    util_spread = float(np.max(utilizations) - np.min(utilizations))
+    delay_spread = float(np.max(delay_scores) - np.min(delay_scores))
+
+    util_spread_bin = discretize(util_spread, 0.0, 1.0, STATE_BINS)
+    delay_spread_bin = discretize(delay_spread, 0.0, 1.0, STATE_BINS)
+    demand_bin = discretize(flow_size_kb, 0.0, MAX_FLOW_SIZE_KB, DEMAND_BINS)
+
+    return (
+        f"{least_path}_"
+        f"{util_spread_bin}_"
+        f"{delay_spread_bin}_"
+        f"{demand_bin}_"
+        f"{previous_action}"
+    )
 
 
 def set_network_state(state):

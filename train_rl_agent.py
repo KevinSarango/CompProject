@@ -5,9 +5,11 @@ import random
 
 from config import (
     ACTION_TO_PATH,
+    DEMAND_BINS,
     NUM_PATHS,
     PATHS,
     Q_TABLE_FILE,
+    STATE_BINS,
     TRAINING_REWARDS_FILE,
     TRAINING_STEPS_FILE,
 )
@@ -18,16 +20,28 @@ ACTIONS = list(range(NUM_PATHS))
 
 
 def build_q_table():
+    """
+    Builds the finite Q-table for the multipath ratio-state representation:
+        least_path_util_spread_bin_delay_spread_bin_demand_bin_previous_action
+    """
     q_table = {}
 
-    for least_utilized_bin in range(NUM_PATHS):
-        for demand_bin in range(3):
-            for previous_action in range(NUM_PATHS):
-                state = f"{least_utilized_bin}_{demand_bin}_{previous_action}"
-                q_table[state] = {
-                    str(action): 0.0
-                    for action in ACTIONS
-                }
+    for least_path in range(NUM_PATHS):
+        for util_spread_bin in range(STATE_BINS):
+            for delay_spread_bin in range(STATE_BINS):
+                for demand_bin in range(DEMAND_BINS):
+                    for previous_action in range(NUM_PATHS):
+                        state = (
+                            f"{least_path}_"
+                            f"{util_spread_bin}_"
+                            f"{delay_spread_bin}_"
+                            f"{demand_bin}_"
+                            f"{previous_action}"
+                        )
+                        q_table[state] = {
+                            str(action): 0.0
+                            for action in ACTIONS
+                        }
 
     return q_table
 
@@ -63,7 +77,11 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
             "start_time",
             "size_kb",
             "path_loads",
+            "path_utilizations",
+            "path_delay_scores",
             "selected_load",
+            "selected_capacity",
+            "selected_util",
             "raw_delay",
             "raw_packet_loss",
             "raw_throughput",
@@ -85,12 +103,15 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
             while not done:
                 state_key = str(state)
 
+                # Keep this fallback so training still works if a new state appears
+                # because bin settings changed without regenerating the Q-table.
                 if state_key not in q_table:
                     q_table[state_key] = {
                         str(action): 0.0
                         for action in ACTIONS
                     }
 
+                # Epsilon-greedy action selection.
                 if random.random() < epsilon:
                     action = random.choice(ACTIONS)
                 else:
@@ -133,7 +154,11 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
                     info["start_time"],
                     info["size_kb"],
                     info["path_loads"],
+                    info["path_utilizations"],
+                    info["path_delay_scores"],
                     info["selected_load"],
+                    info["selected_capacity"],
+                    info["selected_util"],
                     info["raw_delay"],
                     info["raw_packet_loss"],
                     info["raw_throughput"],
@@ -175,7 +200,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
     print("Training complete.")
     print(f"Saved Q-table to: {Q_TABLE_FILE}")
     print(f"Saved rewards to: {TRAINING_REWARDS_FILE}")
-    print(f"Saved steps to:   {TRAINING_STEPS_FILE}")
+    print(f"Saved steps to: {TRAINING_STEPS_FILE}")
     print()
     print(f"Paths: {PATHS}")
     print(f"Q-table states: {len(q_table)}")
@@ -183,7 +208,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
     print()
     print("Sample learned states:")
 
-    for state in sorted(q_table.keys())[:10]:
+    for state in sorted(q_table.keys(), key=lambda s: tuple(int(part) for part in s.split("_")))[:10]:
         values = q_table[state]
         best_action = max(values, key=values.get)
         print(

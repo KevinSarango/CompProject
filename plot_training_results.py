@@ -80,8 +80,11 @@ def plot_q_table_policy():
         list(range(len(PATHS))),
         [ACTION_TO_PATH[str(i)] for i in range(len(PATHS))],
     )
-    plt.xticks(list(x), states, rotation=90)
-    plt.xlabel("State: least_utilized_path_demand_bin_previous_action")
+    if len(states) <= 200:
+        plt.xticks(list(x), states, rotation=90)
+    else:
+        plt.xticks([])
+    plt.xlabel("State: least_path_util_spread_delay_spread_demand_prev_action")
     plt.ylabel("Best Action")
     plt.title(f"Learned Policy from Q-table ({PLOT_PREFIX})")
     plt.tight_layout()
@@ -114,8 +117,11 @@ def plot_q_table_values():
             label=path_name,
         )
 
-    plt.xticks(list(x), states, rotation=90)
-    plt.xlabel("State: least_utilized_path_demand_bin_previous_action")
+    if len(states) <= 200:
+        plt.xticks(list(x), states, rotation=90)
+    else:
+        plt.xticks([])
+    plt.xlabel("State: least_path_util_spread_delay_spread_demand_prev_action")
     plt.ylabel("Q-value")
     plt.title(f"Q-table Values ({PLOT_PREFIX})")
     plt.legend()

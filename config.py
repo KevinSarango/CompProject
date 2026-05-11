@@ -3,7 +3,7 @@ Shared configuration for the SDN RL project.
 
 TOPO_MODE controls which experiment is active:
     diamond     = original 2-path topology
-    three_path  = new 3-path asymmetric topology
+    three_path  = 3-path asymmetric topology
 
 Use:
     TOPO_MODE=diamond python3 train_rl_agent.py
@@ -26,15 +26,27 @@ LOAD_BALANCE_LIMIT_KB = 2750.0
 LOAD_DECAY_FACTOR = 0.85
 DEFAULT_FLOW_SIZE_KB = 500.0
 
+# Ratio-state discretization.
+# The multipath state is:
+#   least_utilized_path_utilization_spread_bin_delay_spread_bin_demand_bin_previous_action
+#
+# utilization_spread_bin represents max(path_utilizations) - min(path_utilizations).
+# delay_spread_bin represents max(path_delay_scores) - min(path_delay_scores).
+# demand_bin represents the incoming flow size.
+STATE_BINS = 20
+DEMAND_BINS = 20
+MAX_FLOW_SIZE_KB = 1000.0
+MAX_DELAY_SCORE = 150.0
+
 # Pingall fallback settings.
 PINGALL_ATTEMPTS = 3
 PINGALL_RETRY_WAIT_SECONDS = 2
 
-# Flow size bins.
+# Legacy flow-size bins kept for compatibility with older scripts.
 SMALL_FLOW_KB = 350.0
 MEDIUM_FLOW_KB = 600.0
 
-# Utilization bin threshold.
+# Legacy utilization threshold kept for compatibility with older scripts.
 UTILIZATION_DIFF_THRESHOLD = 0.15
 
 # Reward weights.
@@ -107,15 +119,9 @@ PATH_CONFIGS = {
         "plot_prefix": "three_path",
 
         # Training/deployment model for the 3-path topology.
-        #
-        # low_delay:
-        #   lower capacity, lower delay
-        #
-        # balanced:
-        #   medium capacity, medium delay
-        #
-        # high_bw:
-        #   higher capacity, higher delay
+        # low_delay: lower capacity, lower delay
+        # balanced:  medium capacity, medium delay
+        # high_bw:   higher capacity, higher delay
         "path_capacity_kb": {
             "low_delay": 1500.0,
             "balanced": 2250.0,

@@ -1,6 +1,8 @@
 import csv
 import os
 
+import numpy as np
+
 from config import (
     DEFAULT_FLOW_SIZE_KB,
     LOAD_DECAY_FACTOR,
@@ -20,8 +22,8 @@ class SimpleSwitch13(BaseMultipathController):
     def __init__(self, *args, **kwargs):
         super(SimpleSwitch13, self).__init__(*args, **kwargs)
 
-        self.path_loads = [0.0 for _ in range(NUM_PATHS)]
-        self.path_capacity_kb = PATH_CAPACITY_KB
+        self.path_loads = np.zeros(NUM_PATHS, dtype=float)
+        self.path_capacity_kb = np.array(PATH_CAPACITY_KB, dtype=float)
         self.decay_factor = LOAD_DECAY_FACTOR
         self.default_flow_size_kb = DEFAULT_FLOW_SIZE_KB
         self.previous_action = 0
@@ -65,10 +67,7 @@ class SimpleSwitch13(BaseMultipathController):
 
     def choose_path(self, src, dst, flow_info=None):
         # Decay estimated loads so older flows gradually stop affecting state.
-        self.path_loads = [
-            load * self.decay_factor
-            for load in self.path_loads
-        ]
+        self.path_loads *= self.decay_factor
 
         flow_size_kb = self.extract_flow_size(flow_info)
 
@@ -80,16 +79,12 @@ class SimpleSwitch13(BaseMultipathController):
 
         set_network_state(state)
         path = choose_path(src, dst, state=state)
-
         action = int(PATH_TO_ACTION[path])
 
         self.path_loads[action] += flow_size_kb
         self.previous_action = action
 
-        path_utils = [
-            self.path_loads[i] / self.path_capacity_kb[i]
-            for i in range(NUM_PATHS)
-        ]
+        path_utils = self.path_loads / self.path_capacity_kb
 
         self.logger.info(
             "[RL] decision=%s src=%s dst=%s state=%s path=%s "
@@ -100,8 +95,8 @@ class SimpleSwitch13(BaseMultipathController):
             state,
             path,
             flow_size_kb,
-            [round(load, 2) for load in self.path_loads],
-            [round(util, 3) for util in path_utils],
+            [round(load, 2) for load in self.path_loads.tolist()],
+            [round(util, 3) for util in path_utils.tolist()],
         )
 
         self.flow_counter += 1
