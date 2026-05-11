@@ -86,8 +86,8 @@ PATH_CONFIGS = {
 
         # Diamond paths are symmetric.
         "path_capacity_kb": {
-            "upper": 2750.0,
-            "lower": 2750.0,
+            "upper": 2250.0,
+            "lower": 2250.0,
         },
         "path_delay_factor": {
             "upper": 1.0,
@@ -122,7 +122,7 @@ PATH_CONFIGS = {
             "high_bw": 3000.0,
         },
         "path_delay_factor": {
-            "low_delay": 0.70,
+            "low_delay": 0.50,
             "balanced": 1.00,
             "high_bw": 1.50,
         },
