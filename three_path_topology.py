@@ -24,16 +24,16 @@ class ThreePathTopo(Topo):
                     |
                    s1
               /     |     \
-            s2      s3      s5
+            s2      s3      s4
               \     |     /
-                   s4
+                   s5
                     |
               h5 h6 h7 h8
 
     Paths:
-        low_delay: s1 -> s2 -> s4
-        balanced:  s1 -> s3 -> s4
-        high_bw:   s1 -> s5 -> s4
+        low_delay: s1 -> s2 -> s5
+        balanced:  s1 -> s3 -> s5
+        high_bw:   s1 -> s4 -> s5
     """
 
     def build(self):
@@ -43,6 +43,7 @@ class ThreePathTopo(Topo):
         s4 = self.addSwitch("s4", dpid="0000000000000004")
         s5 = self.addSwitch("s5", dpid="0000000000000005")
 
+        # Top hosts h1-h4 connect to s1.
         for i in range(1, 5):
             h = self.addHost(
                 f"h{i}",
@@ -51,13 +52,15 @@ class ThreePathTopo(Topo):
             )
             self.addLink(h, s1, port2=i)
 
+        # Bottom hosts h5-h8 connect to s5.
+        # IMPORTANT: s5 is the bottom aggregation switch in this topology.
         for i in range(5, 9):
             h = self.addHost(
                 f"h{i}",
                 ip=f"10.0.0.{i}/24",
                 mac=f"00:00:00:00:00:0{i}",
             )
-            self.addLink(h, s4, port2=i - 4)
+            self.addLink(h, s5, port2=i - 4)
 
         low = THREE_PATH_LINKS["low_delay"]
         balanced = THREE_PATH_LINKS["balanced"]

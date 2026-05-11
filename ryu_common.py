@@ -22,6 +22,16 @@ class BaseMultipathController(app_manager.RyuApp):
         self.datapaths = {}
         self.flow_counter = 0
 
+        # Diamond:
+        #   s1 = top aggregation
+        #   s4 = bottom aggregation
+        #
+        # Three-path:
+        #   s1 = top aggregation
+        #   s5 = bottom aggregation
+        self.top_dpid = 1
+        self.bottom_dpid = 4 if TOPO_MODE == "diamond" else 5
+
         self.ip_to_mac = {
             "10.0.0.1": "00:00:00:00:00:01",
             "10.0.0.2": "00:00:00:00:00:02",
@@ -59,39 +69,43 @@ class BaseMultipathController(app_manager.RyuApp):
                     "middle_dpid": 2,
                     "s1_to_middle": 5,
                     "middle_to_s1": 1,
-                    "middle_to_s4": 2,
-                    "s4_to_middle": 5,
+                    "middle_to_bottom": 2,
+                    "bottom_to_middle": 5,
                 },
                 "lower": {
                     "middle_dpid": 3,
                     "s1_to_middle": 6,
                     "middle_to_s1": 1,
-                    "middle_to_s4": 2,
-                    "s4_to_middle": 6,
+                    "middle_to_bottom": 2,
+                    "bottom_to_middle": 6,
                 },
             }
 
+        # three_path topology:
+        #   low_delay: s1 -> s2 -> s5
+        #   balanced:  s1 -> s3 -> s5
+        #   high_bw:   s1 -> s4 -> s5
         return {
             "low_delay": {
                 "middle_dpid": 2,
                 "s1_to_middle": 5,
                 "middle_to_s1": 1,
-                "middle_to_s4": 2,
-                "s4_to_middle": 5,
+                "middle_to_bottom": 2,
+                "bottom_to_middle": 5,
             },
             "balanced": {
                 "middle_dpid": 3,
                 "s1_to_middle": 6,
                 "middle_to_s1": 1,
-                "middle_to_s4": 2,
-                "s4_to_middle": 6,
+                "middle_to_bottom": 2,
+                "bottom_to_middle": 6,
             },
             "high_bw": {
-                "middle_dpid": 5,
+                "middle_dpid": 4,
                 "s1_to_middle": 7,
                 "middle_to_s1": 1,
-                "middle_to_s4": 2,
-                "s4_to_middle": 7,
+                "middle_to_bottom": 2,
+                "bottom_to_middle": 7,
             },
         }
 
@@ -143,7 +157,13 @@ class BaseMultipathController(app_manager.RyuApp):
         ]
 
         self.add_flow(dp, 0, match, actions)
-        self.logger.info("[%s] Switch connected: s%s", self.POLICY_NAME, dp.id)
+
+        self.logger.info(
+            "[%s] Switch connected: s%s | TOPO_MODE=%s",
+            self.POLICY_NAME,
+            dp.id,
+            TOPO_MODE,
+        )
 
     def add_flow(self, dp, priority, match, actions, idle_timeout=30, hard_timeout=0):
         ofp = dp.ofproto
@@ -234,14 +254,24 @@ class BaseMultipathController(app_manager.RyuApp):
         if src_side is None or dst_side is None:
             return
 
+        # Same-side top traffic stays on s1.
         if src_side == "top" and dst_side == "top":
-            parser = self.datapaths[1].ofproto_parser
-            self.install_match(1, parser.OFPMatch(**match_fields), self.top_hosts[dst_ip], priority)
+            parser = self.datapaths[self.top_dpid].ofproto_parser
+            match = parser.OFPMatch(**match_fields)
+            self.install_match(self.top_dpid, match, self.top_hosts[dst_ip], priority)
             return
 
+        # Same-side bottom traffic stays on bottom aggregation switch.
+        # Diamond bottom is s4. Three-path bottom is s5.
         if src_side == "bottom" and dst_side == "bottom":
-            parser = self.datapaths[4].ofproto_parser
-            self.install_match(4, parser.OFPMatch(**match_fields), self.bottom_hosts[dst_ip], priority)
+            parser = self.datapaths[self.bottom_dpid].ofproto_parser
+            match = parser.OFPMatch(**match_fields)
+            self.install_match(
+                self.bottom_dpid,
+                match,
+                self.bottom_hosts[dst_ip],
+                priority,
+            )
             return
 
         if path not in self.path_ports:
@@ -250,10 +280,11 @@ class BaseMultipathController(app_manager.RyuApp):
         path_info = self.path_ports[path]
         middle_dpid = path_info["middle_dpid"]
 
+        # Top -> Bottom
         if src_side == "top" and dst_side == "bottom":
-            parser = self.datapaths[1].ofproto_parser
+            parser = self.datapaths[self.top_dpid].ofproto_parser
             self.install_match(
-                1,
+                self.top_dpid,
                 parser.OFPMatch(**match_fields),
                 path_info["s1_to_middle"],
                 priority,
@@ -263,25 +294,27 @@ class BaseMultipathController(app_manager.RyuApp):
             self.install_match(
                 middle_dpid,
                 parser.OFPMatch(**match_fields),
-                path_info["middle_to_s4"],
+                path_info["middle_to_bottom"],
                 priority,
             )
 
-            parser = self.datapaths[4].ofproto_parser
+            parser = self.datapaths[self.bottom_dpid].ofproto_parser
             self.install_match(
-                4,
+                self.bottom_dpid,
                 parser.OFPMatch(**match_fields),
                 self.bottom_hosts[dst_ip],
                 priority,
             )
+
             return
 
+        # Bottom -> Top
         if src_side == "bottom" and dst_side == "top":
-            parser = self.datapaths[4].ofproto_parser
+            parser = self.datapaths[self.bottom_dpid].ofproto_parser
             self.install_match(
-                4,
+                self.bottom_dpid,
                 parser.OFPMatch(**match_fields),
-                path_info["s4_to_middle"],
+                path_info["bottom_to_middle"],
                 priority,
             )
 
@@ -293,13 +326,14 @@ class BaseMultipathController(app_manager.RyuApp):
                 priority,
             )
 
-            parser = self.datapaths[1].ofproto_parser
+            parser = self.datapaths[self.top_dpid].ofproto_parser
             self.install_match(
-                1,
+                self.top_dpid,
                 parser.OFPMatch(**match_fields),
                 self.top_hosts[dst_ip],
                 priority,
             )
+
             return
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)

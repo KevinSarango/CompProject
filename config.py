@@ -118,8 +118,8 @@ PATH_CONFIGS = {
         #   higher capacity, higher delay
         "path_capacity_kb": {
             "low_delay": 1500.0,
-            "balanced": 2750.0,
-            "high_bw": 4000.0,
+            "balanced": 2250.0,
+            "high_bw": 3000.0,
         },
         "path_delay_factor": {
             "low_delay": 0.70,
