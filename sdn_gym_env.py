@@ -79,6 +79,17 @@ class SimpleSDNEnv:
 
         return demands
 
+
+    def set_demands(self, demands):
+        """Replace the active traffic trace used by the next episode.
+
+        Training can call this once per episode to avoid replaying the exact
+        same demand sequence for all episodes. Each demand dictionary should
+        contain flow_id, src, dst, start_time, and size_kb.
+        """
+        self.demands = list(demands)
+        self.current_index = 0
+
     def reset(self):
         self.current_index = 0
         self.path_loads = np.zeros(NUM_PATHS, dtype=float)

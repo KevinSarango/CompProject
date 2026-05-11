@@ -164,7 +164,6 @@ PATH_DELAY_FACTOR = [
 Q_TABLE_FILE = ACTIVE_CONFIG["q_table_file"]
 TRAINING_REWARDS_FILE = ACTIVE_CONFIG["training_rewards_file"]
 TRAINING_STEPS_FILE = ACTIVE_CONFIG["training_steps_file"]
-
 FIFO_METRICS_FILE = ACTIVE_CONFIG["fifo_metrics_file"]
 RL_METRICS_FILE = ACTIVE_CONFIG["rl_metrics_file"]
 
@@ -172,4 +171,5 @@ FIFO_TRAFFIC_FILE = ACTIVE_CONFIG["fifo_traffic_file"]
 RL_TRAFFIC_FILE = ACTIVE_CONFIG["rl_traffic_file"]
 
 PLOT_PREFIX = ACTIVE_CONFIG["plot_prefix"]
+TRAINING_SEEDS_FILE = f"data/training_episode_seeds_{PLOT_PREFIX}.csv"
 PLOTS_DIR = "data/plots"

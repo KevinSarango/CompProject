@@ -40,10 +40,10 @@ def generate_demands(num_flows=150, seed=42):
     return demands
 
 
-def save_demands(demands):
-    os.makedirs("data", exist_ok=True)
+def save_demands(demands, output_file=OUTPUT_FILE, verbose=True):
+    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
 
-    with open(OUTPUT_FILE, "w", newline="") as f:
+    with open(output_file, "w", newline="") as f:
         writer = csv.DictWriter(
             f,
             fieldnames=["flow_id", "src", "dst", "start_time", "size_kb"],
@@ -51,7 +51,8 @@ def save_demands(demands):
         writer.writeheader()
         writer.writerows(demands)
 
-    print(f"Saved {len(demands)} demands to {OUTPUT_FILE}")
+    if verbose:
+        print(f"Saved {len(demands)} demands to {output_file}")
 
 
 if __name__ == "__main__":

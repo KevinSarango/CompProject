@@ -11,8 +11,10 @@ from config import (
     Q_TABLE_FILE,
     STATE_BINS,
     TRAINING_REWARDS_FILE,
+    TRAINING_SEEDS_FILE,
     TRAINING_STEPS_FILE,
 )
+from generate_trafpy_demands import generate_demands, save_demands
 from sdn_gym_env import SimpleSDNEnv
 
 
@@ -46,11 +48,83 @@ def build_q_table():
     return q_table
 
 
-def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
+def generate_episode_seeds(episodes, base_seed, max_seed=2_147_483_647):
+    """
+    Build one unique, deterministic traffic seed for each episode.
+
+    Using a seed manifest gives reproducible retraining: the same base_seed
+    and episode count generate the same sequence of per-episode traffic traces.
+    """
+    if episodes <= 0:
+        return []
+
+    rng = random.Random(base_seed)
+    seeds = []
+    seen = set()
+
+    while len(seeds) < episodes:
+        seed = rng.randint(0, max_seed)
+
+        if seed in seen:
+            continue
+
+        seen.add(seed)
+        seeds.append(seed)
+
+    return seeds
+
+
+def save_episode_seeds(episode_seeds, output_file=TRAINING_SEEDS_FILE):
+    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+
+    with open(output_file, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["episode", "traffic_seed"])
+
+        for episode, seed in enumerate(episode_seeds):
+            writer.writerow([episode, seed])
+
+
+def build_episode_demands(episode, num_flows, episode_seeds):
+    """Generate the traffic trace assigned to one episode."""
+    seed = episode_seeds[episode]
+    return generate_demands(num_flows=num_flows, seed=seed), seed
+
+
+def train(
+    episodes=1000,
+    alpha=0.2,
+    gamma=0.9,
+    epsilon=1.0,
+    num_flows=150,
+    base_seed=42,
+):
+    """
+    Train the Q-learning agent.
+
+    A fresh TrafPy-style demand trace is generated for every episode.
+    The trace seeds are generated once from base_seed, saved to
+    TRAINING_SEEDS_FILE, and reused during the run. Reusing the same base_seed
+    recreates the same per-episode traffic traces for reproducible retraining.
+    """
+    os.makedirs("data", exist_ok=True)
+
+    episode_seeds = generate_episode_seeds(
+        episodes=episodes,
+        base_seed=base_seed,
+    )
+    save_episode_seeds(episode_seeds)
+
+    # Create an initial demand file so SimpleSDNEnv can still load normally.
+    initial_demands, _ = build_episode_demands(
+        episode=0,
+        num_flows=num_flows,
+        episode_seeds=episode_seeds,
+    )
+    save_demands(initial_demands, verbose=False)
+
     env = SimpleSDNEnv()
     q_table = build_q_table()
-
-    os.makedirs("data", exist_ok=True)
 
     with open(TRAINING_REWARDS_FILE, "w", newline="") as reward_file, \
          open(TRAINING_STEPS_FILE, "w", newline="") as step_file:
@@ -63,10 +137,13 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
             "total_reward",
             "average_reward",
             "epsilon",
+            "episode_seed",
+            "num_flows",
         ])
 
         step_writer.writerow([
             "episode",
+            "episode_seed",
             "step",
             "state",
             "action",
@@ -95,7 +172,20 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
         ])
 
         for episode in range(episodes):
+            episode_demands, episode_seed = build_episode_demands(
+                episode=episode,
+                num_flows=num_flows,
+                episode_seeds=episode_seeds,
+            )
+
+            # Keep data/trafpy_demands.csv in sync with the currently trained
+            # trace. After training, this file contains the final episode trace
+            # for replay/debugging in Mininet.
+            save_demands(episode_demands, verbose=False)
+
+            env.set_demands(episode_demands)
             state = env.reset()
+
             total_reward = 0.0
             step_count = 0
             done = False
@@ -144,6 +234,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
 
                 step_writer.writerow([
                     episode,
+                    episode_seed,
                     step_count,
                     state_key,
                     action,
@@ -180,11 +271,14 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
                 total_reward,
                 average_reward,
                 epsilon,
+                episode_seed,
+                num_flows,
             ])
 
             if episode % 100 == 0:
                 print(
                     f"Episode {episode} | "
+                    f"Seed={episode_seed} | "
                     f"Steps={step_count} | "
                     f"Total Reward={total_reward:.3f} | "
                     f"Average Reward={average_reward:.3f} | "
@@ -201,7 +295,11 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
     print(f"Saved Q-table to: {Q_TABLE_FILE}")
     print(f"Saved rewards to: {TRAINING_REWARDS_FILE}")
     print(f"Saved steps to: {TRAINING_STEPS_FILE}")
+    print(f"Saved episode seed manifest to: {TRAINING_SEEDS_FILE}")
+    print("Saved final episode demands to: data/trafpy_demands.csv")
     print()
+    print(f"Episodes: {episodes}")
+    print(f"Flows per episode: {num_flows}")
     print(f"Paths: {PATHS}")
     print(f"Q-table states: {len(q_table)}")
     print(f"Q-values: {len(q_table) * NUM_PATHS}")
