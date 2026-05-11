@@ -55,7 +55,7 @@ def save_demands(demands):
 
 
 if __name__ == "__main__":
-    demands = generate_demands(num_flows=150)
+    demands = generate_demands(num_flows=100)
     save_demands(demands)
 
     print()

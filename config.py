@@ -122,7 +122,7 @@ PATH_CONFIGS = {
             "high_bw": 3000.0,
         },
         "path_delay_factor": {
-            "low_delay": 0.50,
+            "low_delay": 0.70,
             "balanced": 1.00,
             "high_bw": 1.50,
         },
