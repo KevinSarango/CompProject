@@ -149,7 +149,7 @@ def save_state_visits(state_visit_counts):
             writer.writerow([state, count])
 
 
-def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
+def train(episodes=1000, alpha=0.2, gamma=0.9, epsilon=1.0):
     training_start = time.time()
 
     os.makedirs("data", exist_ok=True)

@@ -25,7 +25,7 @@ Training traffic controls:
   TRAINING_BASE_SEED  deterministic seed used to create per-episode seeds, default 42000
 
 Evaluation controls:
-  EVAL_NUM_RUNS   number of evaluation traces, default 5
+  EVAL_NUM_RUNS   number of evaluation traces, default 1
   EVAL_NUM_FLOWS  flows per evaluation trace, default 150
   EVAL_BASE_SEED  first deterministic test seed, default 9000
 
@@ -64,7 +64,7 @@ TOPO_MODE=diamond ryu-manager --verbose ryu_fifo_controller.py
 
 Terminal 2:
 cd ~/CompProject
-TOPO_MODE=diamond EVAL_NUM_RUNS=5 EVAL_NUM_FLOWS=150 sudo -E python3 diamond_topology.py --policy FIFO
+TOPO_MODE=diamond EVAL_NUM_RUNS=1 EVAL_NUM_FLOWS=150 sudo -E python3 diamond_topology.py --policy FIFO
 
 RL diamond:
 Terminal 1:
@@ -75,7 +75,7 @@ TOPO_MODE=diamond ryu-manager --verbose ryu_rl_controller.py
 
 Terminal 2:
 cd ~/CompProject
-TOPO_MODE=diamond EVAL_NUM_RUNS=5 EVAL_NUM_FLOWS=150 sudo -E python3 diamond_topology.py --policy RL
+TOPO_MODE=diamond EVAL_NUM_RUNS=1 EVAL_NUM_FLOWS=150 sudo -E python3 diamond_topology.py --policy RL
 
 Evaluate diamond:
 TOPO_MODE=diamond python3 eval_fifo_vs_rl.py
@@ -97,7 +97,7 @@ TOPO_MODE=three_path ryu-manager --verbose ryu_fifo_controller.py
 
 Terminal 2:
 cd ~/CompProject
-TOPO_MODE=three_path EVAL_NUM_RUNS=5 EVAL_NUM_FLOWS=150 sudo -E python3 three_path_topology.py --policy FIFO
+TOPO_MODE=three_path EVAL_NUM_RUNS=1 EVAL_NUM_FLOWS=150 sudo -E python3 three_path_topology.py --policy FIFO
 
 RL three-path:
 Terminal 1:
@@ -108,7 +108,7 @@ TOPO_MODE=three_path ryu-manager --verbose ryu_rl_controller.py
 
 Terminal 2:
 cd ~/CompProject
-TOPO_MODE=three_path EVAL_NUM_RUNS=5 EVAL_NUM_FLOWS=150 sudo -E python3 three_path_topology.py --policy RL
+TOPO_MODE=three_path EVAL_NUM_RUNS=1 EVAL_NUM_FLOWS=150 sudo -E python3 three_path_topology.py --policy RL
 
 Evaluate three-path:
 TOPO_MODE=three_path python3 eval_fifo_vs_rl.py

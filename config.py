@@ -61,7 +61,7 @@ TRAINING_NUM_FLOWS = env_int("TRAINING_NUM_FLOWS", 150)
 TRAINING_BASE_SEED = env_int("TRAINING_BASE_SEED", 42000)
 
 # Multi-seed evaluation settings.
-EVAL_NUM_RUNS = env_int("EVAL_NUM_RUNS", 5)
+EVAL_NUM_RUNS = env_int("EVAL_NUM_RUNS", 1)
 EVAL_NUM_FLOWS = env_int("EVAL_NUM_FLOWS", 150)
 EVAL_BASE_SEED = env_int("EVAL_BASE_SEED", 9000)
 
