@@ -4,14 +4,34 @@ import re
 import time
 
 from config import (
+    EVAL_BASE_SEED,
+    EVAL_NUM_FLOWS,
+    EVAL_NUM_RUNS,
+    EVAL_RUNTIME_FILE,
+    EVAL_SEEDS_FILE,
     FIFO_TRAFFIC_FILE,
     PINGALL_ATTEMPTS,
     PINGALL_RETRY_WAIT_SECONDS,
+    PLOT_PREFIX,
     RL_TRAFFIC_FILE,
 )
+from generate_trafpy_demands import generate_demands, save_demands
 
 
 DEMAND_FILE = "data/trafpy_demands.csv"
+
+
+def format_seconds(seconds):
+    minutes, secs = divmod(float(seconds), 60.0)
+    hours, minutes = divmod(int(minutes), 60)
+
+    if hours:
+        return f"{hours}h {minutes}m {secs:.2f}s"
+
+    if minutes:
+        return f"{minutes}m {secs:.2f}s"
+
+    return f"{secs:.2f}s"
 
 
 def host_ip(host_name):
@@ -60,29 +80,6 @@ def parse_iperf_output(output):
     return throughput
 
 
-def load_demands():
-    if not os.path.exists(DEMAND_FILE):
-        raise FileNotFoundError(
-            f"{DEMAND_FILE} not found. Run python3 generate_trafpy_demands.py first."
-        )
-
-    demands = []
-
-    with open(DEMAND_FILE, "r") as f:
-        reader = csv.DictReader(f)
-
-        for row in reader:
-            demands.append({
-                "flow_id": int(row["flow_id"]),
-                "src": row["src"],
-                "dst": row["dst"],
-                "start_time": float(row["start_time"]),
-                "size_kb": float(row["size_kb"]),
-            })
-
-    return demands
-
-
 def cleanup_logs(net):
     for host in net.hosts:
         host.cmd("rm -f /tmp/iperf_client_*.log /tmp/iperf_server_*.log /tmp/ping_*.log")
@@ -125,22 +122,18 @@ def get_output_file(policy_name):
     return RL_TRAFFIC_FILE
 
 
-def run_automated_tests(net, policy_name):
+def save_eval_seeds(seeds):
     os.makedirs("data", exist_ok=True)
 
-    demands = load_demands()
-    output_file = get_output_file(policy_name)
+    with open(EVAL_SEEDS_FILE, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["eval_run", "eval_seed", "num_flows"])
 
-    print()
-    print("====================================")
-    print(f"Running TrafPy-style traffic: {policy_name}")
-    print("====================================")
+        for eval_run, seed in enumerate(seeds):
+            writer.writerow([eval_run, seed, EVAL_NUM_FLOWS])
 
-    cleanup_logs(net)
 
-    if not run_pingall_with_retries(net):
-        return False
-
+def start_iperf_servers(net, demands):
     for demand in demands:
         flow_id = demand["flow_id"]
         dst = net.get(demand["dst"])
@@ -151,8 +144,8 @@ def run_automated_tests(net, policy_name):
             f"> /tmp/iperf_server_{flow_id}.log 2>&1 &"
         )
 
-    time.sleep(1)
 
+def start_flow_clients(net, demands, eval_run, eval_seed):
     for demand in demands:
         flow_id = demand["flow_id"]
         src = net.get(demand["src"])
@@ -162,6 +155,7 @@ def run_automated_tests(net, policy_name):
         size_bytes = int(demand["size_kb"] * 1024)
 
         print(
+            f"[EVAL {eval_run} seed={eval_seed}] "
             f"[FLOW {flow_id}] {demand['src']} -> {demand['dst']} "
             f"start={start_time}s size={demand['size_kb']}KB port={port}"
         )
@@ -178,7 +172,56 @@ def run_automated_tests(net, policy_name):
             f"> /tmp/ping_{flow_id}.log 2>&1' &"
         )
 
-    max_start = max(d["start_time"] for d in demands)
+
+def collect_run_metrics(net, writer, policy_name, demands, eval_run, eval_seed):
+    for demand in demands:
+        flow_id = demand["flow_id"]
+        src = net.get(demand["src"])
+
+        iperf_output = src.cmd(f"cat /tmp/iperf_client_{flow_id}.log 2>/dev/null")
+        ping_output = src.cmd(f"cat /tmp/ping_{flow_id}.log 2>/dev/null")
+
+        throughput = parse_iperf_output(iperf_output)
+        latency, packet_loss = parse_ping_output(ping_output)
+
+        writer.writerow([
+            policy_name,
+            eval_run,
+            eval_seed,
+            flow_id,
+            demand["src"],
+            demand["dst"],
+            demand["size_kb"],
+            throughput,
+            latency,
+            packet_loss,
+        ])
+
+
+def run_single_eval_trace(net, policy_name, writer, runtime_writer, eval_run, eval_seed):
+    trace_start = time.time()
+    demands = generate_demands(num_flows=EVAL_NUM_FLOWS, seed=eval_seed)
+
+    # Save the active trace for Ryu. The RL controller reloads this file when
+    # its mtime changes and maps TCP port 5001 + flow_id back to size_kb.
+    save_demands(demands, output_file=DEMAND_FILE, verbose=False)
+
+    archive_file = f"data/{PLOT_PREFIX}_eval_demands_seed_{eval_seed}.csv"
+    save_demands(demands, output_file=archive_file, verbose=False)
+
+    print()
+    print("====================================")
+    print(f"Running {policy_name} eval_run={eval_run} seed={eval_seed}")
+    print("====================================")
+
+    cleanup_logs(net)
+
+    start_iperf_servers(net, demands)
+    time.sleep(1)
+
+    start_flow_clients(net, demands, eval_run, eval_seed)
+
+    max_start = max(d["start_time"] for d in demands) if demands else 0.0
     wait_time = max_start + 45
 
     print("[INFO] Waiting for traffic to finish...")
@@ -187,11 +230,57 @@ def run_automated_tests(net, policy_name):
     for host in net.hosts:
         host.cmd("pkill -f 'iperf -s'")
 
-    with open(output_file, "w", newline="") as f:
+    collect_run_metrics(net, writer, policy_name, demands, eval_run, eval_seed)
+
+    trace_end = time.time()
+    trace_duration = trace_end - trace_start
+
+    runtime_writer.writerow([
+        policy_name,
+        eval_run,
+        eval_seed,
+        len(demands),
+        round(trace_start, 6),
+        round(trace_end, 6),
+        round(trace_duration, 6),
+        format_seconds(trace_duration),
+        round(wait_time, 6),
+    ])
+
+    print(
+        f"[TIME] {policy_name} eval_run={eval_run} seed={eval_seed} "
+        f"completed in {format_seconds(trace_duration)}"
+    )
+
+
+def run_automated_tests(net, policy_name):
+    total_start = time.time()
+    os.makedirs("data", exist_ok=True)
+
+    output_file = get_output_file(policy_name)
+    eval_seeds = [EVAL_BASE_SEED + index for index in range(EVAL_NUM_RUNS)]
+    save_eval_seeds(eval_seeds)
+
+    print()
+    print("====================================")
+    print(f"Running multi-seed TrafPy-style traffic: {policy_name}")
+    print(f"eval_runs={EVAL_NUM_RUNS} flows_per_run={EVAL_NUM_FLOWS}")
+    print("====================================")
+
+    cleanup_logs(net)
+
+    if not run_pingall_with_retries(net):
+        return False
+
+    with open(output_file, "w", newline="") as f, \
+         open(EVAL_RUNTIME_FILE, "w", newline="") as runtime_f:
         writer = csv.writer(f)
+        runtime_writer = csv.writer(runtime_f)
 
         writer.writerow([
             "policy",
+            "eval_run",
+            "eval_seed",
             "flow_id",
             "src",
             "dst",
@@ -201,29 +290,47 @@ def run_automated_tests(net, policy_name):
             "packet_loss_percent",
         ])
 
-        for demand in demands:
-            flow_id = demand["flow_id"]
-            src = net.get(demand["src"])
+        runtime_writer.writerow([
+            "policy",
+            "eval_run",
+            "eval_seed",
+            "num_flows",
+            "start_time_epoch",
+            "end_time_epoch",
+            "duration_seconds",
+            "duration_human",
+            "traffic_wait_time_seconds",
+        ])
 
-            iperf_output = src.cmd(f"cat /tmp/iperf_client_{flow_id}.log 2>/dev/null")
-            ping_output = src.cmd(f"cat /tmp/ping_{flow_id}.log 2>/dev/null")
-
-            throughput = parse_iperf_output(iperf_output)
-            latency, packet_loss = parse_ping_output(ping_output)
-
-            writer.writerow([
+        for eval_run, eval_seed in enumerate(eval_seeds):
+            run_single_eval_trace(
+                net,
                 policy_name,
-                flow_id,
-                demand["src"],
-                demand["dst"],
-                demand["size_kb"],
-                throughput,
-                latency,
-                packet_loss,
-            ])
+                writer,
+                runtime_writer,
+                eval_run,
+                eval_seed,
+            )
+
+        total_end = time.time()
+        total_duration = total_end - total_start
+        runtime_writer.writerow([
+            policy_name,
+            "ALL",
+            "",
+            EVAL_NUM_RUNS * EVAL_NUM_FLOWS,
+            round(total_start, 6),
+            round(total_end, 6),
+            round(total_duration, 6),
+            format_seconds(total_duration),
+            "",
+        ])
 
     print()
     print(f"Saved traffic metrics to {output_file}")
+    print(f"Saved evaluation runtime timing to {EVAL_RUNTIME_FILE}")
+    print(f"Saved evaluation seed manifest to {EVAL_SEEDS_FILE}")
+    print(f"[TIME] Full {policy_name} test completed in {format_seconds(total_duration)}")
     print("====================================")
     print()
 

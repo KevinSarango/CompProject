@@ -13,6 +13,10 @@ from ryu_common import BaseMultipathController
 from rl_policy import build_state, choose_path, set_network_state
 
 
+DEMAND_FILE = "data/trafpy_demands.csv"
+IPERF_BASE_PORT = 5001
+
+
 class SimpleSwitch13(BaseMultipathController):
     POLICY_NAME = "RL"
     METRICS_FILE = RL_METRICS_FILE
@@ -25,33 +29,58 @@ class SimpleSwitch13(BaseMultipathController):
         self.decay_factor = LOAD_DECAY_FACTOR
         self.default_flow_size_kb = DEFAULT_FLOW_SIZE_KB
         self.previous_action = 0
-        self.port_to_size = self.load_demand_sizes_by_port()
 
-    def load_demand_sizes_by_port(self):
-        demand_file = "data/trafpy_demands.csv"
+        self.demand_file_mtime = None
+        self.port_to_size = {}
+        self.reload_demand_sizes_if_needed(force=True)
+
+    def reload_demand_sizes_if_needed(self, force=False):
+        """
+        The automated tests rewrite data/trafpy_demands.csv for each evaluation
+        seed. Reloading on mtime change lets Ryu use the real flow size for the
+        current test trace rather than DEFAULT_FLOW_SIZE_KB.
+        """
+        if not os.path.exists(DEMAND_FILE):
+            self.port_to_size = {}
+            self.demand_file_mtime = None
+            return
+
+        mtime = os.path.getmtime(DEMAND_FILE)
+
+        if not force and self.demand_file_mtime == mtime:
+            return
+
         mapping = {}
 
-        if not os.path.exists(demand_file):
-            return mapping
-
-        with open(demand_file, "r") as f:
+        with open(DEMAND_FILE, "r") as f:
             reader = csv.DictReader(f)
 
             for row in reader:
                 try:
                     flow_id = int(row["flow_id"])
                     size_kb = float(row["size_kb"])
-                    port = 5001 + flow_id
-                    mapping[port] = size_kb
-                except (KeyError, ValueError):
+                except (KeyError, TypeError, ValueError):
                     continue
 
-        return mapping
+                port = IPERF_BASE_PORT + flow_id
+                mapping[port] = size_kb
+
+        self.port_to_size = mapping
+        self.demand_file_mtime = mtime
+        self.logger.info(
+            "[RL] Loaded %s flow sizes from %s",
+            len(self.port_to_size),
+            DEMAND_FILE,
+        )
 
     def extract_flow_size(self, flow_info=None):
+        self.reload_demand_sizes_if_needed()
+
         if not isinstance(flow_info, dict):
             return self.default_flow_size_kb
 
+        # For the client-to-server SYN, tcp_dst is 5001 + flow_id.
+        # For the reverse direction, tcp_src may be 5001 + flow_id.
         for key in ["tcp_dst", "tcp_src"]:
             try:
                 port = int(flow_info.get(key))
@@ -80,7 +109,6 @@ class SimpleSwitch13(BaseMultipathController):
 
         set_network_state(state)
         path = choose_path(src, dst, state=state)
-
         action = int(PATH_TO_ACTION[path])
 
         self.path_loads[action] += flow_size_kb

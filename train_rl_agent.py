@@ -2,13 +2,18 @@ import csv
 import json
 import os
 import random
+import time
+from collections import Counter
 
 from config import (
     ACTION_TO_PATH,
     NUM_PATHS,
     PATHS,
     Q_TABLE_FILE,
+    STATE_VISITS_CSV_FILE,
+    STATE_VISITS_FILE,
     TRAINING_REWARDS_FILE,
+    TRAINING_RUNTIME_FILE,
     TRAINING_STEPS_FILE,
 )
 from sdn_gym_env import SimpleSDNEnv
@@ -17,7 +22,58 @@ from sdn_gym_env import SimpleSDNEnv
 ACTIONS = list(range(NUM_PATHS))
 
 
+def format_seconds(seconds):
+    minutes, secs = divmod(float(seconds), 60.0)
+    hours, minutes = divmod(int(minutes), 60)
+
+    if hours:
+        return f"{hours}h {minutes}m {secs:.2f}s"
+
+    if minutes:
+        return f"{minutes}m {secs:.2f}s"
+
+    return f"{secs:.2f}s"
+
+
+def save_training_runtime(start_time, end_time, episodes, visited_states, q_table_size):
+    os.makedirs("data", exist_ok=True)
+    duration = end_time - start_time
+
+    with open(TRAINING_RUNTIME_FILE, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "episodes",
+            "visited_states",
+            "q_table_states",
+            "q_values",
+            "start_time_epoch",
+            "end_time_epoch",
+            "duration_seconds",
+            "duration_human",
+        ])
+        writer.writerow([
+            episodes,
+            visited_states,
+            q_table_size,
+            q_table_size * NUM_PATHS,
+            round(start_time, 6),
+            round(end_time, 6),
+            round(duration, 6),
+            format_seconds(duration),
+        ])
+
+    return duration
+
+
 def build_q_table():
+    """
+    Preserve the Sebas branch state shape:
+        least_utilized_path_bin_demand_bin_previous_action
+
+    least_utilized_path_bin: 0..NUM_PATHS-1
+    demand_bin: 0, 1, 2
+    previous_action: 0..NUM_PATHS-1
+    """
     q_table = {}
 
     for least_utilized_bin in range(NUM_PATHS):
@@ -32,9 +88,25 @@ def build_q_table():
     return q_table
 
 
+def save_state_visits(state_visit_counts):
+    os.makedirs("data", exist_ok=True)
+
+    with open(STATE_VISITS_FILE, "w") as f:
+        json.dump(dict(sorted(state_visit_counts.items())), f, indent=4)
+
+    with open(STATE_VISITS_CSV_FILE, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["state", "visit_count"])
+
+        for state, count in sorted(state_visit_counts.items()):
+            writer.writerow([state, count])
+
+
 def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
+    training_start = time.time()
     env = SimpleSDNEnv()
     q_table = build_q_table()
+    state_visit_counts = Counter()
 
     os.makedirs("data", exist_ok=True)
 
@@ -55,6 +127,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
             "episode",
             "step",
             "state",
+            "state_visit_count",
             "action",
             "path",
             "flow_id",
@@ -84,6 +157,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
 
             while not done:
                 state_key = str(state)
+                state_visit_counts[state_key] += 1
 
                 if state_key not in q_table:
                     q_table[state_key] = {
@@ -125,6 +199,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
                     episode,
                     step_count,
                     state_key,
+                    state_visit_counts[state_key],
                     action,
                     ACTION_TO_PATH[str(action)],
                     info["flow_id"],
@@ -171,15 +246,31 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
     with open(Q_TABLE_FILE, "w") as f:
         json.dump(q_table, f, indent=4)
 
+    save_state_visits(state_visit_counts)
+
+    training_end = time.time()
+    training_duration = save_training_runtime(
+        start_time=training_start,
+        end_time=training_end,
+        episodes=episodes,
+        visited_states=len(state_visit_counts),
+        q_table_size=len(q_table),
+    )
+
     print()
     print("Training complete.")
     print(f"Saved Q-table to: {Q_TABLE_FILE}")
     print(f"Saved rewards to: {TRAINING_REWARDS_FILE}")
-    print(f"Saved steps to:   {TRAINING_STEPS_FILE}")
+    print(f"Saved steps to: {TRAINING_STEPS_FILE}")
+    print(f"Saved state visits to: {STATE_VISITS_FILE}")
+    print(f"Saved state visits CSV to: {STATE_VISITS_CSV_FILE}")
+    print(f"Saved training runtime to: {TRAINING_RUNTIME_FILE}")
+    print(f"Training runtime: {format_seconds(training_duration)}")
     print()
     print(f"Paths: {PATHS}")
     print(f"Q-table states: {len(q_table)}")
     print(f"Q-values: {len(q_table) * NUM_PATHS}")
+    print(f"Visited states: {len(state_visit_counts)}")
     print()
     print("Sample learned states:")
 
@@ -189,6 +280,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
         print(
             f"state={state}, "
             f"best_action={ACTION_TO_PATH[best_action]}, "
+            f"visits={state_visit_counts.get(state, 0)}, "
             f"values={values}"
         )
 

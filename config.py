@@ -21,6 +21,13 @@ if TOPO_MODE not in ["diamond", "three_path"]:
     )
 
 
+def env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 # Shared demand / load settings.
 LOAD_BALANCE_LIMIT_KB = 2750.0
 LOAD_DECAY_FACTOR = 0.85
@@ -45,6 +52,15 @@ GAMMA_ACTION_IMPACT = 1.0
 GAMMA_IMBALANCE = 0.5
 GAMMA_SWITCHING = 0.1
 BASE_REWARD = 1.0
+
+# Multi-seed evaluation settings.
+EVAL_NUM_RUNS = env_int("EVAL_NUM_RUNS", 5)
+EVAL_NUM_FLOWS = env_int("EVAL_NUM_FLOWS", 150)
+EVAL_BASE_SEED = env_int("EVAL_BASE_SEED", 9000)
+
+# Learned-policy plotting settings.
+MIN_STATE_VISITS_FOR_POLICY_PLOT = env_int("MIN_STATE_VISITS_FOR_POLICY_PLOT", 1)
+MAX_POLICY_STATES_TO_PLOT = env_int("MAX_POLICY_STATES_TO_PLOT", 200)
 
 
 # Original diamond topology link parameters.
@@ -78,10 +94,17 @@ PATH_CONFIGS = {
         "q_table_file": "data/q_table_diamond.json",
         "training_rewards_file": "data/training_rewards_diamond.csv",
         "training_steps_file": "data/training_steps_diamond.csv",
+        "training_state_visits_file": "data/training_state_visits_diamond.json",
+        "training_state_visits_csv_file": "data/training_state_visits_diamond.csv",
         "fifo_metrics_file": "data/diamond_fifo_metrics.csv",
         "rl_metrics_file": "data/diamond_rl_metrics.csv",
         "fifo_traffic_file": "data/diamond_fifo_traffic_metrics.csv",
         "rl_traffic_file": "data/diamond_rl_traffic_metrics.csv",
+        "eval_seeds_file": "data/diamond_eval_seeds.csv",
+        "eval_summary_file": "data/diamond_fifo_vs_rl_summary.csv",
+        "eval_by_seed_summary_file": "data/diamond_fifo_vs_rl_summary_by_seed.csv",
+        "eval_runtime_file": "data/diamond_eval_runtime.csv",
+        "training_runtime_file": "data/diamond_training_runtime.csv",
         "plot_prefix": "diamond",
 
         # Diamond paths are symmetric.
@@ -100,22 +123,23 @@ PATH_CONFIGS = {
         "q_table_file": "data/q_table_three_path.json",
         "training_rewards_file": "data/training_rewards_three_path.csv",
         "training_steps_file": "data/training_steps_three_path.csv",
+        "training_state_visits_file": "data/training_state_visits_three_path.json",
+        "training_state_visits_csv_file": "data/training_state_visits_three_path.csv",
         "fifo_metrics_file": "data/three_path_fifo_metrics.csv",
         "rl_metrics_file": "data/three_path_rl_metrics.csv",
         "fifo_traffic_file": "data/three_path_fifo_traffic_metrics.csv",
         "rl_traffic_file": "data/three_path_rl_traffic_metrics.csv",
+        "eval_seeds_file": "data/three_path_eval_seeds.csv",
+        "eval_summary_file": "data/three_path_fifo_vs_rl_summary.csv",
+        "eval_by_seed_summary_file": "data/three_path_fifo_vs_rl_summary_by_seed.csv",
+        "eval_runtime_file": "data/three_path_eval_runtime.csv",
+        "training_runtime_file": "data/three_path_training_runtime.csv",
         "plot_prefix": "three_path",
 
         # Training/deployment model for the 3-path topology.
-        #
-        # low_delay:
-        #   lower capacity, lower delay
-        #
-        # balanced:
-        #   medium capacity, medium delay
-        #
-        # high_bw:
-        #   higher capacity, higher delay
+        # low_delay: lower capacity, lower delay
+        # balanced: medium capacity, medium delay
+        # high_bw: higher capacity, higher delay
         "path_capacity_kb": {
             "low_delay": 1500.0,
             "balanced": 2250.0,
@@ -158,12 +182,20 @@ PATH_DELAY_FACTOR = [
 Q_TABLE_FILE = ACTIVE_CONFIG["q_table_file"]
 TRAINING_REWARDS_FILE = ACTIVE_CONFIG["training_rewards_file"]
 TRAINING_STEPS_FILE = ACTIVE_CONFIG["training_steps_file"]
+STATE_VISITS_FILE = ACTIVE_CONFIG["training_state_visits_file"]
+STATE_VISITS_CSV_FILE = ACTIVE_CONFIG["training_state_visits_csv_file"]
 
 FIFO_METRICS_FILE = ACTIVE_CONFIG["fifo_metrics_file"]
 RL_METRICS_FILE = ACTIVE_CONFIG["rl_metrics_file"]
 
 FIFO_TRAFFIC_FILE = ACTIVE_CONFIG["fifo_traffic_file"]
 RL_TRAFFIC_FILE = ACTIVE_CONFIG["rl_traffic_file"]
+
+EVAL_SEEDS_FILE = ACTIVE_CONFIG["eval_seeds_file"]
+EVAL_SUMMARY_FILE = ACTIVE_CONFIG["eval_summary_file"]
+EVAL_BY_SEED_SUMMARY_FILE = ACTIVE_CONFIG["eval_by_seed_summary_file"]
+EVAL_RUNTIME_FILE = ACTIVE_CONFIG["eval_runtime_file"]
+TRAINING_RUNTIME_FILE = ACTIVE_CONFIG["training_runtime_file"]
 
 PLOT_PREFIX = ACTIVE_CONFIG["plot_prefix"]
 PLOTS_DIR = "data/plots"
