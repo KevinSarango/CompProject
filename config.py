@@ -33,8 +33,8 @@ DEFAULT_FLOW_SIZE_KB = 500.0
 # utilization_spread_bin represents max(path_utilizations) - min(path_utilizations).
 # delay_spread_bin represents max(path_delay_scores) - min(path_delay_scores).
 # demand_bin represents the incoming flow size.
-STATE_BINS = 20
-DEMAND_BINS = 20
+STATE_BINS = 10
+DEMAND_BINS = 10
 MAX_FLOW_SIZE_KB = 1000.0
 MAX_DELAY_SCORE = 150.0
 
