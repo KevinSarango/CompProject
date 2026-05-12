@@ -41,21 +41,11 @@ def plot_rewards():
     episodes, total_rewards, average_rewards = read_rewards()
 
     plt.figure()
-    plt.plot(episodes, total_rewards, label="Total Reward")
-
-    if total_rewards:
-        mean_total_reward = sum(total_rewards) / len(total_rewards)
-        plt.axhline(
-            mean_total_reward,
-            linestyle="--",
-            linewidth=1.5,
-            label=f"Mean Total Reward = {mean_total_reward:.3f}",
-        )
+    plt.plot(episodes, total_rewards)
 
     plt.xlabel("Episode")
     plt.ylabel("Total Reward")
     plt.title(f"RL Training: Total Reward per Episode ({PLOT_PREFIX})")
-    plt.legend()
     plt.savefig(
         os.path.join(PLOTS_DIR, f"{PLOT_PREFIX}_reward_curve_total.png"),
         bbox_inches="tight",
@@ -63,21 +53,11 @@ def plot_rewards():
     plt.close()
 
     plt.figure()
-    plt.plot(episodes, average_rewards, label="Average Reward")
-
-    if average_rewards:
-        mean_average_reward = sum(average_rewards) / len(average_rewards)
-        plt.axhline(
-            mean_average_reward,
-            linestyle="--",
-            linewidth=1.5,
-            label=f"Mean Average Reward = {mean_average_reward:.3f}",
-        )
+    plt.plot(episodes, average_rewards)
 
     plt.xlabel("Episode")
     plt.ylabel("Average Reward")
     plt.title(f"RL Training: Average Reward per Episode ({PLOT_PREFIX})")
-    plt.legend()
     plt.savefig(
         os.path.join(PLOTS_DIR, f"{PLOT_PREFIX}_reward_curve_average.png"),
         bbox_inches="tight",

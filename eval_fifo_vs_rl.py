@@ -294,24 +294,10 @@ def plot_metric_line_graph(fifo_rows, rl_rows, metric, ylabel, title, filename):
     plt.figure()
 
     if fifo_values:
-        fifo_mean = mean(fifo_values)
         plt.plot(fifo_x, fifo_values, marker="o", label="FIFO")
-        plt.axhline(
-            fifo_mean,
-            linestyle="--",
-            linewidth=1.5,
-            label=f"FIFO mean = {fifo_mean:.3f}",
-        )
 
     if rl_values:
-        rl_mean = mean(rl_values)
         plt.plot(rl_x, rl_values, marker="o", label="RL")
-        plt.axhline(
-            rl_mean,
-            linestyle=":",
-            linewidth=1.5,
-            label=f"RL mean = {rl_mean:.3f}",
-        )
 
     plt.xlabel("Evaluation sample index")
     plt.ylabel(ylabel)
