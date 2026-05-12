@@ -3,13 +3,11 @@ Shared configuration for the SDN RL project.
 
 TOPO_MODE controls which experiment is active:
     diamond     = original 2-path topology
-    three_path  = 3-path asymmetric topology
+    three_path  = new 3-path asymmetric topology
 
 Use:
     TOPO_MODE=diamond python3 train_rl_agent.py
     TOPO_MODE=three_path python3 train_rl_agent.py
-
-Most training/evaluation constants can also be overridden with environment variables.
 """
 
 import os
@@ -23,43 +21,46 @@ if TOPO_MODE not in ["diamond", "three_path"]:
     )
 
 
+def env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 # Shared demand / load settings.
 LOAD_BALANCE_LIMIT_KB = 2750.0
 LOAD_DECAY_FACTOR = 0.85
 DEFAULT_FLOW_SIZE_KB = 500.0
 
-# Ratio-state discretization.
-# State format:
-#   least_utilized_path_utilization_spread_bin_delay_spread_bin_demand_bin_previous_action
-STATE_BINS = int(os.environ.get("STATE_BINS", "10"))
-DEMAND_BINS = int(os.environ.get("DEMAND_BINS", "10"))
-MAX_FLOW_SIZE_KB = float(os.environ.get("MAX_FLOW_SIZE_KB", "1000.0"))
-MAX_DELAY_SCORE = float(os.environ.get("MAX_DELAY_SCORE", "150.0"))
-
-# Plot only visited Q-table states by default so policy/value plots are not
-# dominated by untouched zero-valued states.
-MIN_STATE_VISITS_FOR_POLICY_PLOT = int(os.environ.get("MIN_STATE_VISITS_FOR_POLICY_PLOT", "1"))
-MAX_POLICY_STATES_TO_PLOT = int(os.environ.get("MAX_POLICY_STATES_TO_PLOT", "300"))
-
 # Pingall fallback settings.
 PINGALL_ATTEMPTS = 3
 PINGALL_RETRY_WAIT_SECONDS = 2
 
-# Legacy flow-size bins kept for compatibility with older scripts.
+# Flow size bins.
 SMALL_FLOW_KB = 350.0
 MEDIUM_FLOW_KB = 600.0
 
-# Legacy utilization threshold kept for compatibility with older scripts.
+# Utilization bin threshold.
 UTILIZATION_DIFF_THRESHOLD = 0.15
 
 # Reward weights.
-GAMMA_PACKET_LOSS = float(os.environ.get("GAMMA_PACKET_LOSS", "2.0"))
-GAMMA_DELAY = float(os.environ.get("GAMMA_DELAY", "1.5"))
-GAMMA_THROUGHPUT = float(os.environ.get("GAMMA_THROUGHPUT", "1.0"))
-GAMMA_ACTION_IMPACT = float(os.environ.get("GAMMA_ACTION_IMPACT", "1.0"))
-GAMMA_IMBALANCE = float(os.environ.get("GAMMA_IMBALANCE", "0.5"))
-GAMMA_SWITCHING = float(os.environ.get("GAMMA_SWITCHING", "0.1"))
-BASE_REWARD = float(os.environ.get("BASE_REWARD", "1.0"))
+GAMMA_PACKET_LOSS = 2.0
+GAMMA_DELAY = 1.5
+GAMMA_THROUGHPUT = 1.0
+GAMMA_ACTION_IMPACT = 1.0
+GAMMA_IMBALANCE = 0.5
+GAMMA_SWITCHING = 0.1
+BASE_REWARD = 1.0
+
+# Multi-seed evaluation settings.
+EVAL_NUM_RUNS = env_int("EVAL_NUM_RUNS", 5)
+EVAL_NUM_FLOWS = env_int("EVAL_NUM_FLOWS", 150)
+EVAL_BASE_SEED = env_int("EVAL_BASE_SEED", 9000)
+
+# Learned-policy plotting settings.
+MIN_STATE_VISITS_FOR_POLICY_PLOT = env_int("MIN_STATE_VISITS_FOR_POLICY_PLOT", 1)
+MAX_POLICY_STATES_TO_PLOT = env_int("MAX_POLICY_STATES_TO_PLOT", 200)
 
 
 # Original diamond topology link parameters.
@@ -93,10 +94,15 @@ PATH_CONFIGS = {
         "q_table_file": "data/q_table_diamond.json",
         "training_rewards_file": "data/training_rewards_diamond.csv",
         "training_steps_file": "data/training_steps_diamond.csv",
+        "training_state_visits_file": "data/training_state_visits_diamond.json",
+        "training_state_visits_csv_file": "data/training_state_visits_diamond.csv",
         "fifo_metrics_file": "data/diamond_fifo_metrics.csv",
         "rl_metrics_file": "data/diamond_rl_metrics.csv",
         "fifo_traffic_file": "data/diamond_fifo_traffic_metrics.csv",
         "rl_traffic_file": "data/diamond_rl_traffic_metrics.csv",
+        "eval_seeds_file": "data/diamond_eval_seeds.csv",
+        "eval_summary_file": "data/diamond_fifo_vs_rl_summary.csv",
+        "eval_by_seed_summary_file": "data/diamond_fifo_vs_rl_summary_by_seed.csv",
         "plot_prefix": "diamond",
 
         # Diamond paths are symmetric.
@@ -115,16 +121,21 @@ PATH_CONFIGS = {
         "q_table_file": "data/q_table_three_path.json",
         "training_rewards_file": "data/training_rewards_three_path.csv",
         "training_steps_file": "data/training_steps_three_path.csv",
+        "training_state_visits_file": "data/training_state_visits_three_path.json",
+        "training_state_visits_csv_file": "data/training_state_visits_three_path.csv",
         "fifo_metrics_file": "data/three_path_fifo_metrics.csv",
         "rl_metrics_file": "data/three_path_rl_metrics.csv",
         "fifo_traffic_file": "data/three_path_fifo_traffic_metrics.csv",
         "rl_traffic_file": "data/three_path_rl_traffic_metrics.csv",
+        "eval_seeds_file": "data/three_path_eval_seeds.csv",
+        "eval_summary_file": "data/three_path_fifo_vs_rl_summary.csv",
+        "eval_by_seed_summary_file": "data/three_path_fifo_vs_rl_summary_by_seed.csv",
         "plot_prefix": "three_path",
 
         # Training/deployment model for the 3-path topology.
         # low_delay: lower capacity, lower delay
-        # balanced:  medium capacity, medium delay
-        # high_bw:   higher capacity, higher delay
+        # balanced: medium capacity, medium delay
+        # high_bw: higher capacity, higher delay
         "path_capacity_kb": {
             "low_delay": 1500.0,
             "balanced": 2250.0,
@@ -167,24 +178,18 @@ PATH_DELAY_FACTOR = [
 Q_TABLE_FILE = ACTIVE_CONFIG["q_table_file"]
 TRAINING_REWARDS_FILE = ACTIVE_CONFIG["training_rewards_file"]
 TRAINING_STEPS_FILE = ACTIVE_CONFIG["training_steps_file"]
+STATE_VISITS_FILE = ACTIVE_CONFIG["training_state_visits_file"]
+STATE_VISITS_CSV_FILE = ACTIVE_CONFIG["training_state_visits_csv_file"]
+
 FIFO_METRICS_FILE = ACTIVE_CONFIG["fifo_metrics_file"]
 RL_METRICS_FILE = ACTIVE_CONFIG["rl_metrics_file"]
 
 FIFO_TRAFFIC_FILE = ACTIVE_CONFIG["fifo_traffic_file"]
 RL_TRAFFIC_FILE = ACTIVE_CONFIG["rl_traffic_file"]
 
+EVAL_SEEDS_FILE = ACTIVE_CONFIG["eval_seeds_file"]
+EVAL_SUMMARY_FILE = ACTIVE_CONFIG["eval_summary_file"]
+EVAL_BY_SEED_SUMMARY_FILE = ACTIVE_CONFIG["eval_by_seed_summary_file"]
+
 PLOT_PREFIX = ACTIVE_CONFIG["plot_prefix"]
-TRAINING_SEEDS_FILE = f"data/training_episode_seeds_{PLOT_PREFIX}.csv"
-STATE_VISITS_FILE = f"data/state_visit_counts_{PLOT_PREFIX}.json"
-STATE_VISITS_CSV_FILE = f"data/state_visit_counts_{PLOT_PREFIX}.csv"
-
-# Multi-seed evaluation settings. automated_traffic_tests.py uses these to
-# generate multiple deterministic test demand traces in one Mininet run.
-EVAL_NUM_RUNS = int(os.environ.get("EVAL_NUM_RUNS", "5"))
-EVAL_NUM_FLOWS = int(os.environ.get("EVAL_NUM_FLOWS", "150"))
-EVAL_BASE_SEED = int(os.environ.get("EVAL_BASE_SEED", "9000"))
-EVAL_SEEDS_FILE = f"data/eval_episode_seeds_{PLOT_PREFIX}.csv"
-EVAL_SUMMARY_FILE = f"data/{PLOT_PREFIX}_fifo_vs_rl_summary.csv"
-EVAL_BY_SEED_SUMMARY_FILE = f"data/{PLOT_PREFIX}_fifo_vs_rl_summary_by_seed.csv"
-
 PLOTS_DIR = "data/plots"

@@ -63,99 +63,68 @@ def plot_rewards():
     plt.close()
 
 
-def sorted_states(states):
+def sorted_states(q_table):
     return sorted(
-        states,
+        q_table.keys(),
         key=lambda s: tuple(int(part) for part in s.split("_")),
     )
 
 
-def load_q_table():
-    with open(Q_TABLE_FILE, "r") as f:
+def load_state_visits():
+    if not os.path.exists(STATE_VISITS_FILE):
+        print(f"[WARN] Missing state visits file: {STATE_VISITS_FILE}")
+        return {}
+
+    with open(STATE_VISITS_FILE, "r") as f:
         return json.load(f)
 
 
-def load_state_visits():
-    if not os.path.exists(STATE_VISITS_FILE):
-        print(f"[WARN] {STATE_VISITS_FILE} not found. Plotting all Q-table states.")
-        return None
+def filter_visited_states(q_table, state_visits):
+    if not state_visits:
+        return sorted_states(q_table)
 
-    with open(STATE_VISITS_FILE, "r") as f:
-        return {state: int(count) for state, count in json.load(f).items()}
-
-
-def get_plotted_states(q_table, visits):
-    if visits is None:
-        states = sorted_states(q_table.keys())
-        return states[:MAX_POLICY_STATES_TO_PLOT]
-
-    visited_states = [
+    states = [
         state
-        for state, count in visits.items()
-        if count >= MIN_STATE_VISITS_FOR_POLICY_PLOT and state in q_table
+        for state in q_table.keys()
+        if int(state_visits.get(state, 0)) >= MIN_STATE_VISITS_FOR_POLICY_PLOT
     ]
 
-    # Plot the most frequently visited states first. This avoids large policy
-    # plots being dominated by rare/unimportant states.
-    visited_states.sort(
-        key=lambda state: (-visits[state], tuple(int(part) for part in state.split("_")))
+    states.sort(
+        key=lambda s: (
+            -int(state_visits.get(s, 0)),
+            tuple(int(part) for part in s.split("_")),
+        )
     )
 
-    return visited_states[:MAX_POLICY_STATES_TO_PLOT]
-
-
-def plot_state_visit_counts():
-    visits = load_state_visits()
-
-    if not visits:
-        return
-
-    counts = sorted(visits.values(), reverse=True)
-    x = range(len(counts))
-
-    plt.figure(figsize=(12, 5))
-    plt.plot(list(x), counts)
-    plt.xlabel("Visited state rank")
-    plt.ylabel("Visit count")
-    plt.title(f"State Visit Counts ({PLOT_PREFIX})")
-    plt.tight_layout()
-    plt.savefig(
-        os.path.join(PLOTS_DIR, f"{PLOT_PREFIX}_state_visit_counts.png"),
-        bbox_inches="tight",
-    )
-    plt.close()
+    return states[:MAX_POLICY_STATES_TO_PLOT]
 
 
 def plot_q_table_policy():
-    q_table = load_q_table()
-    visits = load_state_visits()
-    states = get_plotted_states(q_table, visits)
+    with open(Q_TABLE_FILE, "r") as f:
+        q_table = json.load(f)
+
+    state_visits = load_state_visits()
+    states = filter_visited_states(q_table, state_visits)
 
     best_actions = []
-    labels = []
 
     for state in states:
         values = q_table[state]
         best_action = int(max(values, key=values.get))
         best_actions.append(best_action)
-        visit_suffix = f"\nvisits={visits[state]}" if visits is not None else ""
-        labels.append(f"{state}{visit_suffix}")
 
     x = range(len(states))
 
-    plt.figure(figsize=(14, 5))
-    plt.plot(list(x), best_actions, marker="o")
+    plt.figure(figsize=(max(12, len(states) * 0.18), 5))
+    plt.plot(list(x), best_actions, marker="o", linewidth=1)
     plt.yticks(
         list(range(len(PATHS))),
         [ACTION_TO_PATH[str(i)] for i in range(len(PATHS))],
     )
-    if len(states) <= 80:
-        plt.xticks(list(x), labels, rotation=90)
-    else:
-        plt.xticks([])
+    plt.xticks(list(x), states, rotation=90)
     plt.xlabel(
-        f"Visited states only; min visits={MIN_STATE_VISITS_FOR_POLICY_PLOT}; "
-        f"showing up to {MAX_POLICY_STATES_TO_PLOT}"
+        "Visited state: least_utilized_path_demand_bin_previous_action "
+        f"(min visits={MIN_STATE_VISITS_FOR_POLICY_PLOT})"
     )
     plt.ylabel("Best Action")
     plt.title(f"Learned Policy from Visited Q-table States ({PLOT_PREFIX})")
@@ -168,12 +137,14 @@ def plot_q_table_policy():
 
 
 def plot_q_table_values():
-    q_table = load_q_table()
-    visits = load_state_visits()
-    states = get_plotted_states(q_table, visits)
+    with open(Q_TABLE_FILE, "r") as f:
+        q_table = json.load(f)
+
+    state_visits = load_state_visits()
+    states = filter_visited_states(q_table, state_visits)
     x = range(len(states))
 
-    plt.figure(figsize=(14, 6))
+    plt.figure(figsize=(max(14, len(states) * 0.2), 6))
 
     width = 0.8 / len(PATHS)
 
@@ -188,24 +159,43 @@ def plot_q_table_values():
             label=path_name,
         )
 
-    if len(states) <= 80:
-        labels = [
-            f"{state}\nvisits={visits[state]}" if visits is not None else state
-            for state in states
-        ]
-        plt.xticks(list(x), labels, rotation=90)
-    else:
-        plt.xticks([])
-    plt.xlabel(
-        f"Visited states only; min visits={MIN_STATE_VISITS_FOR_POLICY_PLOT}; "
-        f"showing up to {MAX_POLICY_STATES_TO_PLOT}"
-    )
+    plt.xticks(list(x), states, rotation=90)
+    plt.xlabel("Visited state: least_utilized_path_demand_bin_previous_action")
     plt.ylabel("Q-value")
     plt.title(f"Q-table Values for Visited States ({PLOT_PREFIX})")
     plt.legend()
     plt.tight_layout()
     plt.savefig(
         os.path.join(PLOTS_DIR, f"{PLOT_PREFIX}_q_table_values.png"),
+        bbox_inches="tight",
+    )
+    plt.close()
+
+
+def plot_state_visit_counts():
+    state_visits = load_state_visits()
+
+    if not state_visits:
+        return
+
+    items = sorted(
+        state_visits.items(),
+        key=lambda item: (-int(item[1]), tuple(int(part) for part in item[0].split("_"))),
+    )[:MAX_POLICY_STATES_TO_PLOT]
+
+    states = [item[0] for item in items]
+    counts = [int(item[1]) for item in items]
+    x = range(len(states))
+
+    plt.figure(figsize=(max(12, len(states) * 0.18), 5))
+    plt.bar(list(x), counts)
+    plt.xticks(list(x), states, rotation=90)
+    plt.xlabel("Visited state")
+    plt.ylabel("Visit Count")
+    plt.title(f"Most Visited Training States ({PLOT_PREFIX})")
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(PLOTS_DIR, f"{PLOT_PREFIX}_state_visit_counts.png"),
         bbox_inches="tight",
     )
     plt.close()
