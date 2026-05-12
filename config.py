@@ -8,6 +8,8 @@ TOPO_MODE controls which experiment is active:
 Use:
     TOPO_MODE=diamond python3 train_rl_agent.py
     TOPO_MODE=three_path python3 train_rl_agent.py
+
+Most training/evaluation constants can also be overridden with environment variables.
 """
 
 import os
@@ -27,16 +29,17 @@ LOAD_DECAY_FACTOR = 0.85
 DEFAULT_FLOW_SIZE_KB = 500.0
 
 # Ratio-state discretization.
-# The multipath state is:
+# State format:
 #   least_utilized_path_utilization_spread_bin_delay_spread_bin_demand_bin_previous_action
-#
-# utilization_spread_bin represents max(path_utilizations) - min(path_utilizations).
-# delay_spread_bin represents max(path_delay_scores) - min(path_delay_scores).
-# demand_bin represents the incoming flow size.
-STATE_BINS = 10
-DEMAND_BINS = 10
-MAX_FLOW_SIZE_KB = 1000.0
-MAX_DELAY_SCORE = 150.0
+STATE_BINS = int(os.environ.get("STATE_BINS", "10"))
+DEMAND_BINS = int(os.environ.get("DEMAND_BINS", "10"))
+MAX_FLOW_SIZE_KB = float(os.environ.get("MAX_FLOW_SIZE_KB", "1000.0"))
+MAX_DELAY_SCORE = float(os.environ.get("MAX_DELAY_SCORE", "150.0"))
+
+# Plot only visited Q-table states by default so policy/value plots are not
+# dominated by untouched zero-valued states.
+MIN_STATE_VISITS_FOR_POLICY_PLOT = int(os.environ.get("MIN_STATE_VISITS_FOR_POLICY_PLOT", "1"))
+MAX_POLICY_STATES_TO_PLOT = int(os.environ.get("MAX_POLICY_STATES_TO_PLOT", "300"))
 
 # Pingall fallback settings.
 PINGALL_ATTEMPTS = 3
@@ -50,13 +53,13 @@ MEDIUM_FLOW_KB = 600.0
 UTILIZATION_DIFF_THRESHOLD = 0.15
 
 # Reward weights.
-GAMMA_PACKET_LOSS = 2.0
-GAMMA_DELAY = 1.5
-GAMMA_THROUGHPUT = 1.0
-GAMMA_ACTION_IMPACT = 1.0
-GAMMA_IMBALANCE = 0.5
-GAMMA_SWITCHING = 0.1
-BASE_REWARD = 1.0
+GAMMA_PACKET_LOSS = float(os.environ.get("GAMMA_PACKET_LOSS", "2.0"))
+GAMMA_DELAY = float(os.environ.get("GAMMA_DELAY", "1.5"))
+GAMMA_THROUGHPUT = float(os.environ.get("GAMMA_THROUGHPUT", "1.0"))
+GAMMA_ACTION_IMPACT = float(os.environ.get("GAMMA_ACTION_IMPACT", "1.0"))
+GAMMA_IMBALANCE = float(os.environ.get("GAMMA_IMBALANCE", "0.5"))
+GAMMA_SWITCHING = float(os.environ.get("GAMMA_SWITCHING", "0.1"))
+BASE_REWARD = float(os.environ.get("BASE_REWARD", "1.0"))
 
 
 # Original diamond topology link parameters.
@@ -172,4 +175,16 @@ RL_TRAFFIC_FILE = ACTIVE_CONFIG["rl_traffic_file"]
 
 PLOT_PREFIX = ACTIVE_CONFIG["plot_prefix"]
 TRAINING_SEEDS_FILE = f"data/training_episode_seeds_{PLOT_PREFIX}.csv"
+STATE_VISITS_FILE = f"data/state_visit_counts_{PLOT_PREFIX}.json"
+STATE_VISITS_CSV_FILE = f"data/state_visit_counts_{PLOT_PREFIX}.csv"
+
+# Multi-seed evaluation settings. automated_traffic_tests.py uses these to
+# generate multiple deterministic test demand traces in one Mininet run.
+EVAL_NUM_RUNS = int(os.environ.get("EVAL_NUM_RUNS", "5"))
+EVAL_NUM_FLOWS = int(os.environ.get("EVAL_NUM_FLOWS", "150"))
+EVAL_BASE_SEED = int(os.environ.get("EVAL_BASE_SEED", "9000"))
+EVAL_SEEDS_FILE = f"data/eval_episode_seeds_{PLOT_PREFIX}.csv"
+EVAL_SUMMARY_FILE = f"data/{PLOT_PREFIX}_fifo_vs_rl_summary.csv"
+EVAL_BY_SEED_SUMMARY_FILE = f"data/{PLOT_PREFIX}_fifo_vs_rl_summary_by_seed.csv"
+
 PLOTS_DIR = "data/plots"

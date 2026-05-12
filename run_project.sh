@@ -2,32 +2,27 @@
 
 PROJECT_DIR="$HOME/CompProject"
 
-echo "========================================="
-echo " Multipath SDN RL Project Instructions"
-echo "========================================="
-echo
+cat <<'EOF'
+=========================================
+ Multipath SDN RL Project Instructions
+=========================================
 
-echo "Step 0: Go to the project directory"
-echo "cd $PROJECT_DIR"
-echo
+The RL trainer now generates fresh, reproducible traffic demands per training
+episode. You do NOT need to run generate_trafpy_demands.py before training.
 
-echo "Step 1: Train RL with reproducible per-episode traffic"
-echo "The training script now generates a different traffic demand trace for every episode."
-echo "It uses 1000 episodes by default and saves the per-episode seed manifest so retraining is reproducible."
-echo "You do NOT need to run generate_trafpy_demands.py before training."
-echo
-echo "For diamond:"
-echo "TOPO_MODE=diamond python3 train_rl_agent.py"
-echo "TOPO_MODE=diamond python3 plot_training_results.py"
-echo "Seed manifest: data/training_episode_seeds_diamond.csv"
-echo
-echo "For three-path:"
-echo "TOPO_MODE=three_path python3 train_rl_agent.py"
-echo "TOPO_MODE=three_path python3 plot_training_results.py"
-echo "Seed manifest: data/training_episode_seeds_three_path.csv"
-echo
-echo "Optional: generate one standalone demand file manually only if you want to inspect or run custom traffic outside training:"
-echo "python3 generate_trafpy_demands.py"
+The Mininet automated evaluation now runs multiple deterministic test seeds per
+policy. Control this with:
+  EVAL_NUM_RUNS   number of evaluation traces, default 5
+  EVAL_NUM_FLOWS  flows per evaluation trace, default 150
+  EVAL_BASE_SEED  first deterministic test seed, default 9000
+
+The learned-policy plots now show only visited Q-table states by default.
+Control this with:
+  MIN_STATE_VISITS_FOR_POLICY_PLOT default 1
+  MAX_POLICY_STATES_TO_PLOT        default 300
+
+EOF
+
 echo
 
 echo "========================================="
@@ -35,7 +30,13 @@ echo " DIAMOND TOPOLOGY"
 echo "========================================="
 echo
 
-echo "FIFO diamond:"
+echo "Train RL for diamond:"
+echo "cd $PROJECT_DIR"
+echo "TOPO_MODE=diamond python3 train_rl_agent.py"
+echo "TOPO_MODE=diamond python3 plot_training_results.py"
+echo
+
+echo "FIFO diamond multi-seed evaluation:"
 echo "Terminal 1:"
 echo "cd $PROJECT_DIR"
 echo "sudo mn -c"
@@ -47,7 +48,7 @@ echo "cd $PROJECT_DIR"
 echo "sudo python3 diamond_topology.py --policy FIFO"
 echo
 
-echo "RL diamond:"
+echo "RL diamond multi-seed evaluation:"
 echo "Terminal 1:"
 echo "cd $PROJECT_DIR"
 echo "sudo mn -c"
@@ -68,7 +69,13 @@ echo " THREE-PATH TOPOLOGY"
 echo "========================================="
 echo
 
-echo "FIFO three-path:"
+echo "Train RL for three-path:"
+echo "cd $PROJECT_DIR"
+echo "TOPO_MODE=three_path python3 train_rl_agent.py"
+echo "TOPO_MODE=three_path python3 plot_training_results.py"
+echo
+
+echo "FIFO three-path multi-seed evaluation:"
 echo "Terminal 1:"
 echo "cd $PROJECT_DIR"
 echo "sudo mn -c"
@@ -80,7 +87,7 @@ echo "cd $PROJECT_DIR"
 echo "sudo python3 three_path_topology.py --policy FIFO"
 echo
 
-echo "RL three-path:"
+echo "RL three-path multi-seed evaluation:"
 echo "Terminal 1:"
 echo "cd $PROJECT_DIR"
 echo "sudo mn -c"
@@ -96,16 +103,16 @@ echo "Evaluate three-path:"
 echo "TOPO_MODE=three_path python3 eval_fifo_vs_rl.py"
 echo
 
-echo "Important output files:"
+echo "Useful output files:"
 echo "- data/q_table_diamond.json"
 echo "- data/q_table_three_path.json"
-echo "- data/training_episode_seeds_diamond.csv"
-echo "- data/training_episode_seeds_three_path.csv"
-echo "- data/training_rewards_diamond.csv"
-echo "- data/training_rewards_three_path.csv"
-echo "- data/diamond_fifo_metrics.csv"
-echo "- data/diamond_rl_metrics.csv"
-echo "- data/three_path_fifo_metrics.csv"
-echo "- data/three_path_rl_metrics.csv"
+echo "- data/state_visit_counts_diamond.json"
+echo "- data/state_visit_counts_three_path.json"
+echo "- data/diamond_fifo_traffic_metrics.csv"
+echo "- data/diamond_rl_traffic_metrics.csv"
+echo "- data/three_path_fifo_traffic_metrics.csv"
+echo "- data/three_path_rl_traffic_metrics.csv"
+echo "- data/diamond_fifo_vs_rl_summary.csv"
+echo "- data/three_path_fifo_vs_rl_summary.csv"
 echo "- data/plots/"
 echo

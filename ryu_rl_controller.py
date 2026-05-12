@@ -27,16 +27,20 @@ class SimpleSwitch13(BaseMultipathController):
         self.decay_factor = LOAD_DECAY_FACTOR
         self.default_flow_size_kb = DEFAULT_FLOW_SIZE_KB
         self.previous_action = 0
+        self.demand_file = "data/trafpy_demands.csv"
+        self.demand_file_mtime = None
         self.port_to_size = self.load_demand_sizes_by_port()
 
     def load_demand_sizes_by_port(self):
-        demand_file = "data/trafpy_demands.csv"
         mapping = {}
 
-        if not os.path.exists(demand_file):
+        if not os.path.exists(self.demand_file):
+            self.demand_file_mtime = None
             return mapping
 
-        with open(demand_file, "r") as f:
+        self.demand_file_mtime = os.path.getmtime(self.demand_file)
+
+        with open(self.demand_file, "r") as f:
             reader = csv.DictReader(f)
 
             for row in reader:
@@ -50,7 +54,22 @@ class SimpleSwitch13(BaseMultipathController):
 
         return mapping
 
+    def refresh_demand_sizes_if_needed(self):
+        if not os.path.exists(self.demand_file):
+            return
+
+        current_mtime = os.path.getmtime(self.demand_file)
+        if self.demand_file_mtime != current_mtime:
+            self.port_to_size = self.load_demand_sizes_by_port()
+            self.logger.info(
+                "[RL] Reloaded %s flow-size entries from %s",
+                len(self.port_to_size),
+                self.demand_file,
+            )
+
     def extract_flow_size(self, flow_info=None):
+        self.refresh_demand_sizes_if_needed()
+
         if not isinstance(flow_info, dict):
             return self.default_flow_size_kb
 

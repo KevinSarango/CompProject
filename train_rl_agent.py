@@ -2,6 +2,7 @@ import csv
 import json
 import os
 import random
+from collections import Counter
 
 from config import (
     ACTION_TO_PATH,
@@ -10,6 +11,8 @@ from config import (
     PATHS,
     Q_TABLE_FILE,
     STATE_BINS,
+    STATE_VISITS_CSV_FILE,
+    STATE_VISITS_FILE,
     TRAINING_REWARDS_FILE,
     TRAINING_SEEDS_FILE,
     TRAINING_STEPS_FILE,
@@ -85,6 +88,23 @@ def save_episode_seeds(episode_seeds, output_file=TRAINING_SEEDS_FILE):
             writer.writerow([episode, seed])
 
 
+def save_state_visit_counts(state_visit_counts):
+    os.makedirs(os.path.dirname(STATE_VISITS_FILE) or ".", exist_ok=True)
+
+    with open(STATE_VISITS_FILE, "w") as f:
+        json.dump(dict(state_visit_counts), f, indent=4, sort_keys=True)
+
+    with open(STATE_VISITS_CSV_FILE, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["state", "visit_count"])
+
+        for state, count in sorted(
+            state_visit_counts.items(),
+            key=lambda item: tuple(int(part) for part in item[0].split("_")),
+        ):
+            writer.writerow([state, count])
+
+
 def build_episode_demands(episode, num_flows, episode_seeds):
     """Generate the traffic trace assigned to one episode."""
     seed = episode_seeds[episode]
@@ -102,10 +122,10 @@ def train(
     """
     Train the Q-learning agent.
 
-    A fresh TrafPy-style demand trace is generated for every episode.
-    The trace seeds are generated once from base_seed, saved to
-    TRAINING_SEEDS_FILE, and reused during the run. Reusing the same base_seed
-    recreates the same per-episode traffic traces for reproducible retraining.
+    A fresh TrafPy-style demand trace is generated for every episode. The trace
+    seeds are generated once from base_seed, saved to TRAINING_SEEDS_FILE, and
+    reused during the run. Reusing the same base_seed recreates the same
+    per-episode traffic traces for reproducible retraining.
     """
     os.makedirs("data", exist_ok=True)
 
@@ -125,6 +145,7 @@ def train(
 
     env = SimpleSDNEnv()
     q_table = build_q_table()
+    state_visit_counts = Counter()
 
     with open(TRAINING_REWARDS_FILE, "w", newline="") as reward_file, \
          open(TRAINING_STEPS_FILE, "w", newline="") as step_file:
@@ -139,6 +160,7 @@ def train(
             "epsilon",
             "episode_seed",
             "num_flows",
+            "unique_states_visited",
         ])
 
         step_writer.writerow([
@@ -146,6 +168,7 @@ def train(
             "episode_seed",
             "step",
             "state",
+            "state_visit_count",
             "action",
             "path",
             "flow_id",
@@ -178,9 +201,8 @@ def train(
                 episode_seeds=episode_seeds,
             )
 
-            # Keep data/trafpy_demands.csv in sync with the currently trained
-            # trace. After training, this file contains the final episode trace
-            # for replay/debugging in Mininet.
+            # Keep data/trafpy_demands.csv in sync with the current episode trace.
+            # After training, this file contains the final episode trace.
             save_demands(episode_demands, verbose=False)
 
             env.set_demands(episode_demands)
@@ -192,6 +214,7 @@ def train(
 
             while not done:
                 state_key = str(state)
+                state_visit_counts[state_key] += 1
 
                 # Keep this fallback so training still works if a new state appears
                 # because bin settings changed without regenerating the Q-table.
@@ -237,6 +260,7 @@ def train(
                     episode_seed,
                     step_count,
                     state_key,
+                    state_visit_counts[state_key],
                     action,
                     ACTION_TO_PATH[str(action)],
                     info["flow_id"],
@@ -273,6 +297,7 @@ def train(
                 epsilon,
                 episode_seed,
                 num_flows,
+                len(state_visit_counts),
             ])
 
             if episode % 100 == 0:
@@ -282,6 +307,7 @@ def train(
                     f"Steps={step_count} | "
                     f"Total Reward={total_reward:.3f} | "
                     f"Average Reward={average_reward:.3f} | "
+                    f"Unique states={len(state_visit_counts)} | "
                     f"Epsilon={epsilon:.4f}"
                 )
 
@@ -290,12 +316,15 @@ def train(
     with open(Q_TABLE_FILE, "w") as f:
         json.dump(q_table, f, indent=4)
 
+    save_state_visit_counts(state_visit_counts)
+
     print()
     print("Training complete.")
     print(f"Saved Q-table to: {Q_TABLE_FILE}")
     print(f"Saved rewards to: {TRAINING_REWARDS_FILE}")
     print(f"Saved steps to: {TRAINING_STEPS_FILE}")
     print(f"Saved episode seed manifest to: {TRAINING_SEEDS_FILE}")
+    print(f"Saved state visit counts to: {STATE_VISITS_FILE}")
     print("Saved final episode demands to: data/trafpy_demands.csv")
     print()
     print(f"Episodes: {episodes}")
@@ -303,14 +332,16 @@ def train(
     print(f"Paths: {PATHS}")
     print(f"Q-table states: {len(q_table)}")
     print(f"Q-values: {len(q_table) * NUM_PATHS}")
+    print(f"Visited states: {len(state_visit_counts)}")
     print()
-    print("Sample learned states:")
+    print("Sample visited learned states:")
 
-    for state in sorted(q_table.keys(), key=lambda s: tuple(int(part) for part in s.split("_")))[:10]:
+    for state, _ in state_visit_counts.most_common(10):
         values = q_table[state]
         best_action = max(values, key=values.get)
         print(
             f"state={state}, "
+            f"visits={state_visit_counts[state]}, "
             f"best_action={ACTION_TO_PATH[best_action]}, "
             f"values={values}"
         )
