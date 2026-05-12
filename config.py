@@ -53,6 +53,13 @@ GAMMA_IMBALANCE = 0.5
 GAMMA_SWITCHING = 0.1
 BASE_REWARD = 1.0
 
+
+# Per-episode training traffic settings.
+# The training script generates a fresh TrafPy-style demand trace each episode.
+# Seeds are deterministic and saved so retraining can reproduce the same traces.
+TRAINING_NUM_FLOWS = env_int("TRAINING_NUM_FLOWS", 150)
+TRAINING_BASE_SEED = env_int("TRAINING_BASE_SEED", 42000)
+
 # Multi-seed evaluation settings.
 EVAL_NUM_RUNS = env_int("EVAL_NUM_RUNS", 5)
 EVAL_NUM_FLOWS = env_int("EVAL_NUM_FLOWS", 150)
@@ -105,6 +112,7 @@ PATH_CONFIGS = {
         "eval_by_seed_summary_file": "data/diamond_fifo_vs_rl_summary_by_seed.csv",
         "eval_runtime_file": "data/diamond_eval_runtime.csv",
         "training_runtime_file": "data/diamond_training_runtime.csv",
+        "training_episode_seeds_file": "data/training_episode_seeds_diamond.csv",
         "plot_prefix": "diamond",
 
         # Diamond paths are symmetric.
@@ -134,6 +142,7 @@ PATH_CONFIGS = {
         "eval_by_seed_summary_file": "data/three_path_fifo_vs_rl_summary_by_seed.csv",
         "eval_runtime_file": "data/three_path_eval_runtime.csv",
         "training_runtime_file": "data/three_path_training_runtime.csv",
+        "training_episode_seeds_file": "data/training_episode_seeds_three_path.csv",
         "plot_prefix": "three_path",
 
         # Training/deployment model for the 3-path topology.
@@ -146,7 +155,7 @@ PATH_CONFIGS = {
             "high_bw": 3000.0,
         },
         "path_delay_factor": {
-            "low_delay": 0.70,
+            "low_delay": 0.50,
             "balanced": 1.00,
             "high_bw": 1.50,
         },
@@ -196,6 +205,7 @@ EVAL_SUMMARY_FILE = ACTIVE_CONFIG["eval_summary_file"]
 EVAL_BY_SEED_SUMMARY_FILE = ACTIVE_CONFIG["eval_by_seed_summary_file"]
 EVAL_RUNTIME_FILE = ACTIVE_CONFIG["eval_runtime_file"]
 TRAINING_RUNTIME_FILE = ACTIVE_CONFIG["training_runtime_file"]
+TRAINING_EPISODE_SEEDS_FILE = ACTIVE_CONFIG["training_episode_seeds_file"]
 
 PLOT_PREFIX = ACTIVE_CONFIG["plot_prefix"]
 PLOTS_DIR = "data/plots"

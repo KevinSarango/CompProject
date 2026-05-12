@@ -73,6 +73,11 @@ class SimpleSDNEnv:
 
         return demands
 
+    def set_demands(self, demands):
+        """Replace the active demand trace for a new training episode."""
+        self.demands = list(demands)
+        self.current_index = 0
+
     def reset(self):
         self.current_index = 0
         self.path_loads = [0.0 for _ in range(NUM_PATHS)]

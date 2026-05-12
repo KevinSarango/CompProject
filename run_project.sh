@@ -18,6 +18,11 @@ New changes in this patch:
   4. plot_training_results.py plots learned policy/Q-values for visited states.
   5. Training and Mininet evaluation runtime are saved to CSV.
   6. Latency, throughput, and reward plots include average reference lines.
+  7. train_rl_agent.py generates a new reproducible demand trace per episode.
+
+Training traffic controls:
+  TRAINING_NUM_FLOWS  flows per training episode, default 150
+  TRAINING_BASE_SEED  deterministic seed used to create per-episode seeds, default 42000
 
 Evaluation controls:
   EVAL_NUM_RUNS   number of evaluation traces, default 5
@@ -32,7 +37,15 @@ Policy plot controls:
  Before training
 =========================================
 cd ~/CompProject
-python3 generate_trafpy_demands.py
+
+You no longer need to run generate_trafpy_demands.py before training.
+train_rl_agent.py automatically generates a fresh demand trace for every episode
+and saves the reproducible seed manifest to:
+  data/training_episode_seeds_diamond.csv
+  data/training_episode_seeds_three_path.csv
+
+You can still run python3 generate_trafpy_demands.py manually if you only want
+to inspect one standalone demand file.
 
 =========================================
  DIAMOND TOPOLOGY
@@ -103,6 +116,8 @@ TOPO_MODE=three_path python3 eval_fifo_vs_rl.py
 Important output files:
 - data/q_table_diamond.json
 - data/q_table_three_path.json
+- data/training_episode_seeds_diamond.csv
+- data/training_episode_seeds_three_path.csv
 - data/training_state_visits_diamond.json
 - data/training_state_visits_three_path.json
 - data/diamond_training_runtime.csv

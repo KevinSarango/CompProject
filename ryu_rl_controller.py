@@ -31,7 +31,7 @@ class SimpleSwitch13(BaseMultipathController):
         self.previous_action = 0
 
         self.demand_file_mtime = None
-        self.port_to_size = {}
+        self.flow_sizes = {}
         self.reload_demand_sizes_if_needed(force=True)
 
     def reload_demand_sizes_if_needed(self, force=False):
@@ -41,7 +41,7 @@ class SimpleSwitch13(BaseMultipathController):
         current test trace rather than DEFAULT_FLOW_SIZE_KB.
         """
         if not os.path.exists(DEMAND_FILE):
-            self.port_to_size = {}
+            self.flow_sizes = {}
             self.demand_file_mtime = None
             return
 
@@ -50,7 +50,7 @@ class SimpleSwitch13(BaseMultipathController):
         if not force and self.demand_file_mtime == mtime:
             return
 
-        mapping = {}
+        flow_sizes = {}
 
         with open(DEMAND_FILE, "r") as f:
             reader = csv.DictReader(f)
@@ -62,14 +62,13 @@ class SimpleSwitch13(BaseMultipathController):
                 except (KeyError, TypeError, ValueError):
                     continue
 
-                port = IPERF_BASE_PORT + flow_id
-                mapping[port] = size_kb
+                flow_sizes[flow_id] = size_kb
 
-        self.port_to_size = mapping
+        self.flow_sizes = flow_sizes
         self.demand_file_mtime = mtime
         self.logger.info(
             "[RL] Loaded %s flow sizes from %s",
-            len(self.port_to_size),
+            len(self.flow_sizes),
             DEMAND_FILE,
         )
 
@@ -79,16 +78,18 @@ class SimpleSwitch13(BaseMultipathController):
         if not isinstance(flow_info, dict):
             return self.default_flow_size_kb
 
-        # For the client-to-server SYN, tcp_dst is 5001 + flow_id.
-        # For the reverse direction, tcp_src may be 5001 + flow_id.
+        # automated_traffic_tests.py uses port = 5001 + flow_id for each iperf flow.
+        # For client-to-server packets this is tcp_dst. For reverse packets it can be tcp_src.
         for key in ["tcp_dst", "tcp_src"]:
             try:
                 port = int(flow_info.get(key))
             except (TypeError, ValueError):
                 continue
 
-            if port in self.port_to_size:
-                return self.port_to_size[port]
+            flow_id = port - IPERF_BASE_PORT
+
+            if flow_id in self.flow_sizes:
+                return self.flow_sizes[flow_id]
 
         return self.default_flow_size_kb
 

@@ -12,14 +12,19 @@ from config import (
     Q_TABLE_FILE,
     STATE_VISITS_CSV_FILE,
     STATE_VISITS_FILE,
+    TRAINING_BASE_SEED,
+    TRAINING_EPISODE_SEEDS_FILE,
+    TRAINING_NUM_FLOWS,
     TRAINING_REWARDS_FILE,
     TRAINING_RUNTIME_FILE,
     TRAINING_STEPS_FILE,
 )
+from generate_trafpy_demands import generate_demands, save_demands
 from sdn_gym_env import SimpleSDNEnv
 
 
 ACTIONS = list(range(NUM_PATHS))
+DEMAND_FILE = "data/trafpy_demands.csv"
 
 
 def format_seconds(seconds):
@@ -35,6 +40,44 @@ def format_seconds(seconds):
     return f"{secs:.2f}s"
 
 
+def make_episode_seeds(episodes, base_seed):
+    """
+    Creates one unique, deterministic seed per episode.
+
+    Using the same TRAINING_BASE_SEED and episode count reproduces the exact
+    same sequence of per-episode traffic demand traces when retraining.
+    """
+    rng = random.Random(base_seed)
+    seeds = []
+    seen = set()
+
+    while len(seeds) < episodes:
+        seed = rng.randrange(1, 2**31 - 1)
+        if seed in seen:
+            continue
+        seen.add(seed)
+        seeds.append(seed)
+
+    return seeds
+
+
+def save_episode_seeds(seeds, base_seed, num_flows):
+    os.makedirs(os.path.dirname(TRAINING_EPISODE_SEEDS_FILE) or ".", exist_ok=True)
+
+    with open(TRAINING_EPISODE_SEEDS_FILE, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["episode", "seed", "base_seed", "num_flows"])
+
+        for episode, seed in enumerate(seeds):
+            writer.writerow([episode, seed, base_seed, num_flows])
+
+
+def write_episode_demands(seed, num_flows, verbose=False):
+    demands = generate_demands(num_flows=num_flows, seed=seed)
+    save_demands(demands, output_file=DEMAND_FILE, verbose=verbose)
+    return demands
+
+
 def save_training_runtime(start_time, end_time, episodes, visited_states, q_table_size):
     os.makedirs("data", exist_ok=True)
     duration = end_time - start_time
@@ -43,6 +86,8 @@ def save_training_runtime(start_time, end_time, episodes, visited_states, q_tabl
         writer = csv.writer(f)
         writer.writerow([
             "episodes",
+            "training_num_flows",
+            "training_base_seed",
             "visited_states",
             "q_table_states",
             "q_values",
@@ -53,6 +98,8 @@ def save_training_runtime(start_time, end_time, episodes, visited_states, q_tabl
         ])
         writer.writerow([
             episodes,
+            TRAINING_NUM_FLOWS,
+            TRAINING_BASE_SEED,
             visited_states,
             q_table_size,
             q_table_size * NUM_PATHS,
@@ -104,11 +151,27 @@ def save_state_visits(state_visit_counts):
 
 def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
     training_start = time.time()
-    env = SimpleSDNEnv()
-    q_table = build_q_table()
-    state_visit_counts = Counter()
 
     os.makedirs("data", exist_ok=True)
+    episode_seeds = make_episode_seeds(episodes, TRAINING_BASE_SEED)
+    save_episode_seeds(
+        seeds=episode_seeds,
+        base_seed=TRAINING_BASE_SEED,
+        num_flows=TRAINING_NUM_FLOWS,
+    )
+
+    # Create the first demand file before constructing the environment.
+    first_demands = write_episode_demands(
+        seed=episode_seeds[0],
+        num_flows=TRAINING_NUM_FLOWS,
+        verbose=False,
+    )
+
+    env = SimpleSDNEnv(demand_file=DEMAND_FILE)
+    env.set_demands(first_demands)
+
+    q_table = build_q_table()
+    state_visit_counts = Counter()
 
     with open(TRAINING_REWARDS_FILE, "w", newline="") as reward_file, \
          open(TRAINING_STEPS_FILE, "w", newline="") as step_file:
@@ -118,6 +181,8 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
 
         reward_writer.writerow([
             "episode",
+            "episode_seed",
+            "num_flows",
             "total_reward",
             "average_reward",
             "epsilon",
@@ -125,6 +190,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
 
         step_writer.writerow([
             "episode",
+            "episode_seed",
             "step",
             "state",
             "state_visit_count",
@@ -149,7 +215,17 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
             "reward",
         ])
 
-        for episode in range(episodes):
+        for episode, episode_seed in enumerate(episode_seeds):
+            if episode == 0:
+                demands = first_demands
+            else:
+                demands = write_episode_demands(
+                    seed=episode_seed,
+                    num_flows=TRAINING_NUM_FLOWS,
+                    verbose=False,
+                )
+                env.set_demands(demands)
+
             state = env.reset()
             total_reward = 0.0
             step_count = 0
@@ -197,6 +273,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
 
                 step_writer.writerow([
                     episode,
+                    episode_seed,
                     step_count,
                     state_key,
                     state_visit_counts[state_key],
@@ -227,6 +304,8 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
 
             reward_writer.writerow([
                 episode,
+                episode_seed,
+                TRAINING_NUM_FLOWS,
                 total_reward,
                 average_reward,
                 epsilon,
@@ -235,6 +314,7 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
             if episode % 100 == 0:
                 print(
                     f"Episode {episode} | "
+                    f"Seed={episode_seed} | "
                     f"Steps={step_count} | "
                     f"Total Reward={total_reward:.3f} | "
                     f"Average Reward={average_reward:.3f} | "
@@ -262,12 +342,15 @@ def train(episodes=3000, alpha=0.2, gamma=0.9, epsilon=1.0):
     print(f"Saved Q-table to: {Q_TABLE_FILE}")
     print(f"Saved rewards to: {TRAINING_REWARDS_FILE}")
     print(f"Saved steps to: {TRAINING_STEPS_FILE}")
+    print(f"Saved per-episode seed manifest to: {TRAINING_EPISODE_SEEDS_FILE}")
     print(f"Saved state visits to: {STATE_VISITS_FILE}")
     print(f"Saved state visits CSV to: {STATE_VISITS_CSV_FILE}")
     print(f"Saved training runtime to: {TRAINING_RUNTIME_FILE}")
     print(f"Training runtime: {format_seconds(training_duration)}")
     print()
     print(f"Paths: {PATHS}")
+    print(f"Training flows per episode: {TRAINING_NUM_FLOWS}")
+    print(f"Training base seed: {TRAINING_BASE_SEED}")
     print(f"Q-table states: {len(q_table)}")
     print(f"Q-values: {len(q_table) * NUM_PATHS}")
     print(f"Visited states: {len(state_visit_counts)}")
